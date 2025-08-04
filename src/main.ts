@@ -85,6 +85,14 @@ const guiParams = {
       }
     }
   },
+  sendMessage: () => {
+    if (agentManager.getSelectedAgent()) {
+      const message = prompt('Enter message for agent:');
+      if (message) {
+        sendAgentMessage(agentManager.getSelectedAgent(), message);
+      }
+    }
+  },
   
   // Debug
   showStats: false,
@@ -121,6 +129,7 @@ visualFolder.add(guiParams, 'showTowers').onChange((value: boolean) => {
 const agentFolder = gui.addFolder('Agents');
 agentFolder.add(guiParams, 'selectedAgent').listen().disable();
 agentFolder.add(guiParams, 'sendThinkCommand').name('Send Think Command');
+agentFolder.add(guiParams, 'sendMessage').name('Send Message');
 
 // Debug folder
 const debugFolder = gui.addFolder('Debug');
@@ -145,6 +154,27 @@ async function sendAgentCommand(agentName: string, command: string, params: any)
     }
   } catch (error) {
     console.error('Error sending command:', error);
+  }
+}
+
+// Send message to agent helper
+async function sendAgentMessage(agentName: string, content: string) {
+  try {
+    const response = await fetch(`http://localhost:8888/agents/${agentName}/message`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ content, message_type: 'text' }),
+    });
+    
+    if (!response.ok) {
+      console.error('Failed to send message:', response.statusText);
+    } else {
+      console.log(`Message sent to ${agentName}: ${content}`);
+    }
+  } catch (error) {
+    console.error('Error sending message:', error);
   }
 }
 
