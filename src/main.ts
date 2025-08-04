@@ -8,6 +8,7 @@ import { AgentManager } from './AgentManager';
 import { GridSystem } from './GridSystem';
 import { FilesystemVisualizer } from './FilesystemVisualizer';
 import { WebSocketClient } from './WebSocketClient';
+import { Mailbox } from './Mailbox';
 
 // Scene setup
 const scene = new THREE.Scene();
@@ -96,7 +97,12 @@ const guiParams = {
   
   // Debug
   showStats: false,
-  logWebSocket: false
+  logWebSocket: false,
+  
+  // Mailbox
+  openMailbox: () => {
+    mailbox.toggle();
+  }
 };
 
 // Camera folder
@@ -137,6 +143,10 @@ debugFolder.add(guiParams, 'showStats');
 debugFolder.add(guiParams, 'logWebSocket').onChange((value: boolean) => {
   // Will be used to toggle WebSocket logging
 });
+
+// Developer folder
+const devFolder = gui.addFolder('Developer');
+devFolder.add(guiParams, 'openMailbox').name('📧 Mailbox');
 
 // Send command to agent helper
 async function sendAgentCommand(agentName: string, command: string, params: any) {
@@ -191,6 +201,9 @@ const filesystemViz = new FilesystemVisualizer(scene);
 
 // Agent manager
 const agentManager = new AgentManager(scene);
+
+// Mailbox
+const mailbox = new Mailbox();
 
 // WebSocket connection
 const wsClient = new WebSocketClient('ws://localhost:8888/ws');
@@ -286,6 +299,20 @@ async function fetchInitialStatus() {
 
 // Connect WebSocket
 wsClient.connect();
+
+// Listen for mailbox updates
+window.addEventListener('mailbox-unread-count', (event: any) => {
+  const unreadEl = document.getElementById('unread-count');
+  if (unreadEl) {
+    unreadEl.textContent = event.detail.count.toString();
+    unreadEl.style.color = event.detail.count > 0 ? '#ffff00' : '#666666';
+  }
+});
+
+// Check mailbox on startup
+setTimeout(() => {
+  mailbox.refreshMessages();
+}, 2000);
 
 // Raycaster for mouse interaction
 const raycaster = new THREE.Raycaster();
