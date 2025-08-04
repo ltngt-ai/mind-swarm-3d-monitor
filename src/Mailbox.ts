@@ -190,12 +190,6 @@ export class Mailbox {
       if (response.ok) {
         const data = await response.json();
         this.messages = data.messages || [];
-        console.log(`Fetched ${this.messages.length} messages, ${this.messages.filter(m => !m._read).length} unread`);
-        // Log first unread message to check structure
-        const firstUnread = this.messages.find(m => !m._read);
-        if (firstUnread) {
-          console.log('First unread message:', firstUnread);
-        }
         this.updateMessagesDisplay();
         this.updateUnreadCount();
       }
@@ -262,7 +256,6 @@ export class Mailbox {
   }
   
   private async markAsRead(unreadIndex: number) {
-    console.log(`Marking message at unread index ${unreadIndex} as read`);
     try {
       const response = await fetch('http://localhost:8888/developers/mailbox/read', {
         method: 'POST',
@@ -273,11 +266,8 @@ export class Mailbox {
       });
       
       if (response.ok) {
-        console.log('Message marked as read successfully');
         // Refresh messages to get updated state
         await this.refreshMessages();
-      } else {
-        console.error('Failed to mark message as read:', response.status, await response.text());
       }
     } catch (error) {
       console.error('Failed to mark message as read:', error);
