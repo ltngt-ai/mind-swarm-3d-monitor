@@ -178,6 +178,14 @@ export class Mailbox {
   
   async refreshMessages() {
     try {
+      // Show loading state if visible
+      if (this.isVisible && this.messagesContainer.innerHTML !== '') {
+        const firstChild = this.messagesContainer.firstChild;
+        if (firstChild && firstChild instanceof HTMLElement) {
+          firstChild.style.opacity = '0.5';
+        }
+      }
+      
       const response = await fetch('http://localhost:8888/developers/mailbox?include_read=true');
       if (response.ok) {
         const data = await response.json();
@@ -201,6 +209,9 @@ export class Mailbox {
       return;
     }
     
+    // Get list of unread messages for proper indexing
+    const unreadMessages = this.messages.filter(m => !m._read);
+    
     this.messages.forEach((msg, index) => {
       const msgEl = document.createElement('div');
       msgEl.style.cssText = `
@@ -209,7 +220,7 @@ export class Mailbox {
         background: ${msg._read ? 'rgba(0, 40, 80, 0.3)' : 'rgba(0, 80, 160, 0.5)'};
         border: 1px solid ${msg._read ? '#004080' : '#0080ff'};
         border-radius: 4px;
-        cursor: pointer;
+        cursor: ${msg._read ? 'default' : 'pointer'};
       `;
       
       const header = document.createElement('div');
@@ -233,28 +244,30 @@ export class Mailbox {
       msgEl.appendChild(header);
       msgEl.appendChild(content);
       
-      msgEl.onclick = () => this.markAsRead(index);
+      // Only allow marking unread messages as read
+      if (!msg._read) {
+        const unreadIndex = unreadMessages.indexOf(msg);
+        msgEl.onclick = () => this.markAsRead(unreadIndex);
+        msgEl.title = 'Click to mark as read';
+      }
       
       this.messagesContainer.appendChild(msgEl);
     });
   }
   
-  private async markAsRead(index: number) {
-    if (this.messages[index]._read) return;
-    
+  private async markAsRead(unreadIndex: number) {
     try {
       const response = await fetch('http://localhost:8888/developers/mailbox/read', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ message_index: index }),
+        body: JSON.stringify({ message_index: unreadIndex }),
       });
       
       if (response.ok) {
-        this.messages[index]._read = true;
-        this.updateMessagesDisplay();
-        this.updateUnreadCount();
+        // Refresh messages to get updated state
+        await this.refreshMessages();
       }
     } catch (error) {
       console.error('Failed to mark message as read:', error);

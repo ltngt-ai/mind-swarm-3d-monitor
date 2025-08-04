@@ -56,10 +56,22 @@ let moveSpeed = 0.5;
 const keys: Record<string, boolean> = {};
 
 window.addEventListener('keydown', (e) => {
+  // Ignore key events when typing in input fields
+  if (e.target instanceof HTMLInputElement || 
+      e.target instanceof HTMLTextAreaElement || 
+      e.target instanceof HTMLSelectElement) {
+    return;
+  }
   keys[e.key.toLowerCase()] = true;
 });
 
 window.addEventListener('keyup', (e) => {
+  // Ignore key events when typing in input fields
+  if (e.target instanceof HTMLInputElement || 
+      e.target instanceof HTMLTextAreaElement || 
+      e.target instanceof HTMLSelectElement) {
+    return;
+  }
   keys[e.key.toLowerCase()] = false;
 });
 
@@ -309,9 +321,13 @@ window.addEventListener('mailbox-unread-count', (event: any) => {
   }
 });
 
-// Check mailbox on startup
+// Check mailbox on startup and periodically
 setTimeout(() => {
   mailbox.refreshMessages();
+  // Refresh mailbox every 10 seconds
+  setInterval(() => {
+    mailbox.refreshMessages();
+  }, 10000);
 }, 2000);
 
 // Raycaster for mouse interaction
