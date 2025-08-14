@@ -129,6 +129,12 @@ const guiParams = {
   // Mailbox
   openMailbox: () => {
     mailbox.toggle();
+  },
+  
+  // Manual refresh
+  refreshStatus: () => {
+    console.log('Manually refreshing status...');
+    fetchInitialStatus();
   }
 };
 
@@ -176,6 +182,7 @@ debugFolder.add(guiParams, 'logWebSocket').onChange((_value: boolean) => {
 // Developer folder
 const devFolder = gui.addFolder('Developer');
 devFolder.add(guiParams, 'openMailbox').name('📧 Mailbox');
+devFolder.add(guiParams, 'refreshStatus').name('🔄 Refresh Status');
 
 // Send command to cyber helper
 async function sendAgentCommand(agentName: string, command: string, params: any) {
@@ -223,8 +230,9 @@ async function sendAgentMessage(agentName: string, content: string) {
 const ambientLight = new THREE.AmbientLight(0x0080ff, 0.1);
 scene.add(ambientLight);
 
-// Grid system (the Tron floor)
+// Grid system (the Tron floor) - infinite LOD grid
 const gridSystem = new GridSystem();
+gridSystem.setCamera(camera);
 scene.add(gridSystem.mesh);
 
 // Filesystem visualization
@@ -232,6 +240,9 @@ const filesystemViz = new FilesystemVisualizer(scene);
 
 // Agent manager
 const agentManager = new AgentManager(scene);
+
+// Set filesystem visualizer reference for location-based positioning
+agentManager.setFilesystemVisualizer(filesystemViz);
 
 // Mailbox
 const mailbox = new Mailbox();
@@ -244,7 +255,8 @@ wsClient.on('agent_created', (data: AgentCreatedEvent) => {
   agentManager.addAgent(data.name, {
     type: data.cyber_type || 'general',
     state: 'idle',
-    premium: (data.config as any)?.use_premium || false
+    premium: (data.config as any)?.use_premium || false,
+    current_location: (data as any).current_location
   });
   updateAgentCount();
 });
@@ -290,6 +302,33 @@ wsClient.on('agent_thinking', (data: AgentThinkingEvent) => {
   }
 });
 
+// Handle agent location changes
+wsClient.on('agent_location_changed', (data: any) => {
+  if (data.name && data.new_location) {
+    console.log(`Agent ${data.name} moved to: ${data.new_location}`);
+    agentManager.updateAgentLocation(data.name, data.new_location);
+  }
+});
+
+// Handle status updates that might include location changes
+wsClient.on('status_update', (data: any) => {
+  if (data.Cybers) {
+    Object.entries(data.Cybers).forEach(([name, cyberData]: [string, any]) => {
+      // Check if location has changed
+      const agent = agentManager.getAgentData(name);
+      if (agent && cyberData.current_location && agent.currentLocation !== cyberData.current_location) {
+        console.log(`Agent ${name} location updated to: ${cyberData.current_location}`);
+        agentManager.updateAgentLocation(name, cyberData.current_location);
+      }
+      
+      // Update other properties
+      if (cyberData.state && agent && agent.state !== cyberData.state.toLowerCase()) {
+        agentManager.updateAgentState(name, cyberData.state.toLowerCase());
+      }
+    });
+  }
+});
+
 wsClient.on('connected', () => {
   updateConnectionStatus('connected');
   // Fetch initial status
@@ -299,6 +338,37 @@ wsClient.on('connected', () => {
 wsClient.on('disconnected', () => {
   updateConnectionStatus('disconnected');
 });
+
+// Fetch status update to check for changes
+async function fetchStatusUpdate() {
+  try {
+    const response = await fetch('http://localhost:8888/status');
+    if (response.ok) {
+      const data: StatusResponse = await response.json();
+      
+      if (data.Cybers) {
+        Object.entries(data.Cybers).forEach(([name, cyberData]) => {
+          const agent = agentManager.getAgentData(name);
+          if (agent) {
+            // Check for location changes
+            if (cyberData.current_location && agent.currentLocation !== cyberData.current_location) {
+              console.log(`Agent ${name} location changed: ${agent.currentLocation} -> ${cyberData.current_location}`);
+              agentManager.updateAgentLocation(name, cyberData.current_location);
+            }
+            
+            // Check for state changes
+            const newState = cyberData.state?.toLowerCase() || 'unknown';
+            if (agent.state !== newState) {
+              agentManager.updateAgentState(name, newState);
+            }
+          }
+        });
+      }
+    }
+  } catch (error) {
+    // Silently fail - this is just a periodic check
+  }
+}
 
 // Fetch initial cyber status
 async function fetchInitialStatus() {
@@ -319,7 +389,8 @@ async function fetchInitialStatus() {
           agentManager.addAgent(name, {
             type: cyberData.type || 'general',
             state: cyberData.state?.toLowerCase() || 'unknown',
-            premium: cyberData.premium || false
+            premium: cyberData.premium || false,
+            current_location: cyberData.current_location
           });
         });
         updateAgentCount();
@@ -356,6 +427,11 @@ setTimeout(() => {
   setInterval(() => {
     mailbox.refreshMessages();
   }, 10000);
+  
+  // Also periodically check for status updates (including location changes)
+  setInterval(() => {
+    fetchStatusUpdate();
+  }, 5000); // Check every 5 seconds
 }, 2000);
 
 // Raycaster for mouse interaction

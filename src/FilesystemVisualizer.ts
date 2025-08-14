@@ -1,19 +1,5 @@
 import * as THREE from 'three';
-
-// Types for filesystem structure
-interface DirectoryNode {
-  name: string;
-  path: string;
-  type: 'directory' | 'file';
-  children?: DirectoryNode[];
-  activity_level?: number;
-  last_accessed?: string;
-}
-
-interface FilesystemStructure {
-  grid: DirectoryNode;
-  cyber_homes?: DirectoryNode[];
-}
+import { FilesystemNode, FilesystemStructure } from './types';
 
 interface DirectoryColors {
   [key: string]: {
@@ -27,8 +13,10 @@ export class FilesystemVisualizer {
   private scene: THREE.Scene;
   private rootGroup: THREE.Group;
   private towers: Map<string, THREE.Group> = new Map();
+  private towerPositions: Map<string, THREE.Vector3> = new Map();
   private towerGeometry: THREE.BoxGeometry;
   private subTowerGeometry: THREE.BoxGeometry;
+  private fileGeometry: THREE.SphereGeometry;
   private time: number = 0;
   private filesystemStructure: FilesystemStructure | null = null;
   private updateInterval: NodeJS.Timeout | null = null;
@@ -51,9 +39,10 @@ export class FilesystemVisualizer {
     this.rootGroup = new THREE.Group();
     this.scene.add(this.rootGroup);
     
-    // Base tower geometry - will be scaled for different heights
+    // Base geometries for towers and files
     this.towerGeometry = new THREE.BoxGeometry(4, 1, 4);
     this.subTowerGeometry = new THREE.BoxGeometry(2, 1, 2);
+    this.fileGeometry = new THREE.SphereGeometry(0.5, 8, 6);
     
     // Start with "NOT CONNECTED" indicator
     this.showNotConnected();
@@ -159,11 +148,14 @@ export class FilesystemVisualizer {
     
     // Create grid directory structure (main visualization)
     if (this.filesystemStructure.grid) {
+      console.log('Creating towers for grid structure:', this.filesystemStructure.grid);
       this.createDirectoryTower(
         this.filesystemStructure.grid,
         new THREE.Vector3(0, 0, -50), // Center position
-        true // Show subdirectories
+        true, // Show subdirectories
+        0 // Starting depth
       );
+      console.log('Tower positions created:', Array.from(this.towerPositions.keys()));
     }
     
     // Create cyber home directories if they exist
@@ -212,49 +204,66 @@ export class FilesystemVisualizer {
       });
     });
     this.towers.clear();
+    this.towerPositions.clear();
   }
   
   // Create a directory tower with sub-towers for children
   private createDirectoryTower(
-    directory: DirectoryNode,
+    directory: FilesystemNode,
     position: THREE.Vector3,
-    showSubDirectories: boolean
+    showSubDirectories: boolean,
+    depth: number = 0
   ): THREE.Group {
     const colors = this.getDirectoryColors(directory.name);
     const activityMultiplier = directory.activity_level ? 1 + directory.activity_level * 0.5 : 1;
-    const height = colors.height * activityMultiplier;
+    const scaleFactor = Math.max(0.3, 1 - depth * 0.1); // Scale down very gradually with depth
+    const height = colors.height * activityMultiplier * scaleFactor;
     
     // Create main tower
-    const mainTower = this.createTower(
+    const mainTower = depth === 0 
+      ? this.createTower(directory.name, position, height, colors.primary, colors.emissive)
+      : this.createSubTower(directory.name, position, height, colors.primary, colors.emissive);
+    
+    // Store this tower's position with its full path
+    const pathKey = directory.path || directory.name;
+    this.towers.set(pathKey, mainTower);
+    this.towerPositions.set(pathKey, position.clone());
+    
+    // Also store with simplified paths for easier matching
+    const simplifiedPaths = [
       directory.name,
-      position,
-      height,
-      colors.primary,
-      colors.emissive
-    );
+      pathKey.replace('subspace/', ''),
+      pathKey.split('/').slice(-2).join('/'),
+      pathKey.split('/').slice(-3).join('/')
+    ];
+    simplifiedPaths.forEach(p => {
+      if (p && !this.towerPositions.has(p)) {
+        this.towerPositions.set(p, position.clone());
+      }
+    });
     
     // Create sub-towers for children if enabled
     if (showSubDirectories && directory.children) {
-      const subPositions = this.calculateSubDirectoryPositions(position, directory.children.length);
+      const childDirectories = directory.children.filter(c => c.type === 'directory');
+      const subPositions = this.calculateSubDirectoryPositions(position, childDirectories.length, depth, childDirectories);
       
-      directory.children.forEach((child, index) => {
-        const childColors = this.getDirectoryColors(child.name);
-        const childHeight = childColors.height * 0.7; // Sub-directories are smaller
-        
-        const subTower = this.createSubTower(
-          child.name,
-          subPositions[index],
-          childHeight,
-          childColors.primary,
-          childColors.emissive
-        );
-        
-        // Connect sub-tower to main tower with a line
-        this.createConnectionLine(position, subPositions[index], colors.primary);
-        
-        // Store sub-tower reference
-        this.towers.set(`${directory.name}/${child.name}`, subTower);
+      let subIndex = 0;
+      directory.children.forEach((child) => {
+        if (child.type === 'directory') {
+          // Recursively create tower for subdirectory
+          this.createDirectoryTower(child, subPositions[subIndex], true, depth + 1);
+          
+          // Connect sub-tower to main tower with a line
+          this.createConnectionLine(position, subPositions[subIndex], colors.primary * 0.7);
+          
+          subIndex++;
+        }
       });
+      
+      // Create file markers for files in this directory
+      if (directory.children) {
+        this.createFilesForDirectory(directory, position);
+      }
     }
     
     return mainTower;
@@ -263,10 +272,22 @@ export class FilesystemVisualizer {
   // Calculate positions for sub-directories around their parent
   private calculateSubDirectoryPositions(
     parentPosition: THREE.Vector3,
-    childCount: number
+    childCount: number,
+    depth: number = 0,
+    children?: FilesystemNode[]
   ): THREE.Vector3[] {
     const positions: THREE.Vector3[] = [];
-    const radius = 25;
+    
+    // Calculate radius based on the complexity of children
+    let maxChildComplexity = 1;
+    if (children) {
+      maxChildComplexity = Math.max(...children.map(child => this.calculateDirectoryComplexity(child)));
+    }
+    
+    // Base radius that grows with depth to avoid collision, plus extra space for complex children
+    const baseRadius = Math.max(15, 20 + depth * 5);
+    const complexityBonus = Math.max(0, (maxChildComplexity - 1) * 8);
+    const radius = baseRadius + complexityBonus;
     
     for (let i = 0; i < childCount; i++) {
       const angle = (i / childCount) * Math.PI * 2;
@@ -276,6 +297,21 @@ export class FilesystemVisualizer {
     }
     
     return positions;
+  }
+  
+  // Calculate complexity (max depth + children count) of a directory tree
+  private calculateDirectoryComplexity(node: FilesystemNode): number {
+    if (!node.children || node.children.length === 0) {
+      return 1;
+    }
+    
+    const childDirectories = node.children.filter(c => c.type === 'directory');
+    if (childDirectories.length === 0) {
+      return 1;
+    }
+    
+    const maxChildDepth = Math.max(...childDirectories.map(child => this.calculateDirectoryComplexity(child)));
+    return 1 + maxChildDepth + (childDirectories.length * 0.2); // Add bonus for having many children
   }
   
   // Get color scheme for directory type
@@ -289,7 +325,7 @@ export class FilesystemVisualizer {
   
   // Create a smaller cyber home tower
   private createCyberHomeTower(
-    cyberHome: DirectoryNode,
+    cyberHome: FilesystemNode,
     position: THREE.Vector3,
     displayName: string
   ): THREE.Group {
@@ -366,9 +402,11 @@ export class FilesystemVisualizer {
     // Position the tower
     group.position.copy(position);
     
-    // Add to scene and store reference
+    // Add to scene and store reference and position
     this.rootGroup.add(group);
     this.towers.set(cyberHome.name, group);
+    this.towerPositions.set(cyberHome.path, position);
+    this.towerPositions.set(cyberHome.name, position); // Also store by name
     
     return group;
   }
@@ -473,9 +511,10 @@ export class FilesystemVisualizer {
     // Position the tower
     group.position.copy(position);
     
-    // Add to scene and store reference
+    // Add to scene and store reference and position
     this.rootGroup.add(group);
     this.towers.set(name, group);
+    this.towerPositions.set(name, position);
     
     return group;
   }
@@ -642,7 +681,7 @@ export class FilesystemVisualizer {
   }
   
   // Helper to update activity in directory tree
-  private updateNodeActivity(node: DirectoryNode, targetPath: string, activityLevel: number): void {
+  private updateNodeActivity(node: FilesystemNode, targetPath: string, activityLevel: number): void {
     if (node.path === targetPath) {
       node.activity_level = activityLevel;
       return;
@@ -749,5 +788,157 @@ export class FilesystemVisualizer {
     };
     
     setTimeout(fadeOut, 100);
+  }
+  
+  // Get tower position for a given path - used by AgentManager
+  getTowerPosition(path: string): THREE.Vector3 | null {
+    // Try to find position by path
+    let position = this.towerPositions.get(path);
+    if (position) {
+      return position.clone();
+    }
+    
+    // Try various path patterns, from most specific to least specific
+    const pathParts = path.split('/').filter(p => p.length > 0);
+    const possiblePaths = [
+      pathParts.join('/'), // Full relative path (most specific)
+      // Try intermediate paths for deeply nested locations
+      pathParts.length > 3 ? pathParts.slice(0, 4).join('/') : null,
+      pathParts.length > 2 ? pathParts.slice(0, 3).join('/') : null,
+      pathParts.length > 1 ? pathParts.slice(0, 2).join('/') : null,
+      pathParts.slice(-2).join('/'), // Last two parts
+      pathParts[pathParts.length - 1], // Last directory alone
+      pathParts[0] // First directory (least specific - fallback)
+    ].filter(p => p !== null);
+    
+    for (const possiblePath of possiblePaths) {
+      position = this.towerPositions.get(possiblePath);
+      if (position) {
+        // Found position - return without logging (too spammy)
+        return position.clone();
+      }
+    }
+    
+    // Only log if not found (for debugging)
+    // console.log(`No tower position found for path: ${path}`);
+    return null;
+  }
+  
+  // Highlight a tower - used by AgentManager when agent is at location
+  highlightTower(path: string) {
+    // Try to find the tower
+    let tower = this.towers.get(path);
+    
+    if (!tower) {
+      // Try various path patterns
+      const pathParts = path.split('/').filter(p => p.length > 0);
+      const possiblePaths = [
+        pathParts[pathParts.length - 1], // Last directory
+        pathParts.join('/'), // Full relative path
+        pathParts.slice(-2).join('/'), // Last two parts
+        pathParts[0] // First directory
+      ];
+      
+      for (const possiblePath of possiblePaths) {
+        tower = this.towers.get(possiblePath);
+        if (tower) {
+          console.log(`Found tower for path ${path} using pattern: ${possiblePath}`);
+          break;
+        }
+      }
+    }
+    
+    if (tower) {
+      // Pulse the light to show highlighting
+      const light = tower.children.find(child => child instanceof THREE.PointLight) as THREE.PointLight;
+      if (light) {
+        const originalIntensity = light.intensity || 0.5;
+        const targetIntensity = originalIntensity * 3;
+        const duration = 1000;
+        const startTime = Date.now();
+        
+        const animate = () => {
+          const elapsed = Date.now() - startTime;
+          const progress = Math.min(elapsed / duration, 1);
+          
+          if (progress < 0.5) {
+            light.intensity = originalIntensity + (targetIntensity - originalIntensity) * (progress * 2);
+          } else {
+            light.intensity = targetIntensity - (targetIntensity - originalIntensity) * ((progress - 0.5) * 2);
+          }
+          
+          if (progress < 1) {
+            requestAnimationFrame(animate);
+          } else {
+            light.intensity = originalIntensity;
+          }
+        };
+        
+        animate();
+      }
+    } else {
+      console.log(`No tower found to highlight for path: ${path}`);
+    }
+  }
+  
+  // Create file markers for files in a directory
+  private createFilesForDirectory(directory: FilesystemNode, basePosition: THREE.Vector3) {
+    if (!directory.children) return;
+    
+    const files = directory.children.filter(child => child.type === 'file');
+    if (files.length === 0) return;
+    
+    // Position files in a small circle around the directory tower
+    const radius = 3;
+    files.forEach((file, index) => {
+      const angle = (index / files.length) * Math.PI * 2;
+      const filePosition = new THREE.Vector3(
+        basePosition.x + Math.cos(angle) * radius,
+        basePosition.y + 2,
+        basePosition.z + Math.sin(angle) * radius
+      );
+      
+      this.createFileMarker(file, filePosition);
+    });
+  }
+  
+  // Create a small marker for a file
+  private createFileMarker(file: FilesystemNode, position: THREE.Vector3) {
+    const group = new THREE.Group();
+    
+    // File colors based on extension or type
+    let color = 0x888888; // Default gray
+    if (file.name.endsWith('.json')) color = 0xffaa00;
+    else if (file.name.endsWith('.py')) color = 0x3776ab;
+    else if (file.name.endsWith('.js') || file.name.endsWith('.ts')) color = 0xf7df1e;
+    else if (file.name.endsWith('.md')) color = 0x4285f4;
+    else if (file.name.endsWith('.txt')) color = 0xcccccc;
+    
+    // Small sphere for the file
+    const fileMaterial = new THREE.MeshPhongMaterial({
+      color: color,
+      transparent: true,
+      opacity: 0.7,
+      emissive: color,
+      emissiveIntensity: 0.1
+    });
+    
+    const fileMesh = new THREE.Mesh(this.fileGeometry, fileMaterial);
+    group.add(fileMesh);
+    
+    // Small light
+    const light = new THREE.PointLight(color, 0.1, 5);
+    light.position.y = 1;
+    group.add(light);
+    
+    // Position the file marker
+    group.position.copy(position);
+    
+    // Add to scene
+    this.rootGroup.add(group);
+    
+    // Store reference
+    this.towers.set(file.path, group);
+    this.towerPositions.set(file.path, position);
   }
 }

@@ -4,6 +4,7 @@ export interface CyberInfo {
   type: string;
   state: string;
   premium: boolean;
+  current_location?: string;
 }
 
 export interface StatusResponse {
@@ -97,6 +98,22 @@ export interface MailboxResponse {
 
 export interface MarkAsReadRequest {
   message_index: number;
+}
+
+// Filesystem structure types
+export interface FilesystemNode {
+  name: string;
+  path: string;
+  type: 'directory' | 'file';
+  size?: number;
+  children?: FilesystemNode[];
+  activity_level?: number;
+  last_accessed?: string;
+}
+
+export interface FilesystemStructure {
+  grid: FilesystemNode;
+  cyber_homes?: FilesystemNode[];
 }
 
 // Community Questions
