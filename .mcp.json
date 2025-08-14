@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "name": "File System MCP",
+      "description": "Local file management for Mind Swarm 3D Monitor project",
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-filesystem", "/home/deano/projects/mind-swarm-3d-monitor"],
+      "env": {}
+    }
+  },
+  "_disabled_servers": {
+    "comment": "These servers are available but not configured. Add API keys and paths to enable.",
+    "typescript-sdk": {
+      "name": "TypeScript SDK",
+      "description": "Official Anthropic SDK for building MCP servers and clients in JS/TS",
+      "command": "node",
+      "args": ["path/to/ts-sdk-server.js"],
+      "env": {}
+    },
+    "github": {
+      "name": "GitHub MCP",
+      "description": "Integration with GitHub API for managing repos, issues, and PRs",
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "your_github_token_here"
+      }
+    }
+  }
+}
