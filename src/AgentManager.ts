@@ -231,7 +231,7 @@ export class AgentManager {
     
     if (intersects.length > 0) {
       const hitMesh = intersects[0].object.parent;
-      for (const [name, agent] of this.agents) {
+      for (const [_name, agent] of this.agents) {
         if (agent.mesh === hitMesh) {
           return agent;
         }

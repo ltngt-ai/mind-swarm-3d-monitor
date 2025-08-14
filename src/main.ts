@@ -9,6 +9,15 @@ import { GridSystem } from './GridSystem';
 import { FilesystemVisualizer } from './FilesystemVisualizer';
 import { WebSocketClient } from './WebSocketClient';
 import { Mailbox } from './Mailbox';
+import { 
+  StatusResponse, 
+  SendCommandRequest, 
+  SendMessageRequest,
+  AgentCreatedEvent,
+  AgentStateChangedEvent,
+  AgentThinkingEvent,
+  FileActivityEvent
+} from './types';
 
 // Scene setup
 const scene = new THREE.Scene();
@@ -87,22 +96,28 @@ const guiParams = {
   bloomRadius: 0.4,
   gridOpacity: 0.6,
   showTowers: true,
+  refreshFilesystem: () => {
+    console.log('Manually refreshing filesystem structure...');
+    filesystemViz.refresh();
+  },
   
   // Agent controls
   selectedAgent: 'None',
   sendThinkCommand: () => {
-    if (agentManager.getSelectedAgent()) {
+    const selectedAgent = agentManager.getSelectedAgent();
+    if (selectedAgent) {
       const thought = prompt('Enter thought for agent:');
       if (thought) {
-        sendAgentCommand(agentManager.getSelectedAgent(), 'think', { message: thought });
+        sendAgentCommand(selectedAgent, 'think', { message: thought });
       }
     }
   },
   sendMessage: () => {
-    if (agentManager.getSelectedAgent()) {
+    const selectedAgent = agentManager.getSelectedAgent();
+    if (selectedAgent) {
       const message = prompt('Enter message for agent:');
       if (message) {
-        sendAgentMessage(agentManager.getSelectedAgent(), message);
+        sendAgentMessage(selectedAgent, message);
       }
     }
   },
@@ -136,12 +151,14 @@ visualFolder.add(guiParams, 'bloomRadius', 0, 1).onChange((value: number) => {
   bloomPass.radius = value;
 });
 visualFolder.add(guiParams, 'gridOpacity', 0, 1).onChange((value: number) => {
-  const gridMaterial = gridSystem.mesh.children[0].material as THREE.LineBasicMaterial;
+  const gridChild = gridSystem.mesh.children[0] as THREE.Line;
+  const gridMaterial = gridChild.material as THREE.LineBasicMaterial;
   gridMaterial.opacity = value;
 });
 visualFolder.add(guiParams, 'showTowers').onChange((value: boolean) => {
   filesystemViz.setVisible(value);
 });
+visualFolder.add(guiParams, 'refreshFilesystem').name('🔄 Refresh Filesystem');
 
 // Agent folder
 const agentFolder = gui.addFolder('Agents');
@@ -152,7 +169,7 @@ agentFolder.add(guiParams, 'sendMessage').name('Send Message');
 // Debug folder
 const debugFolder = gui.addFolder('Debug');
 debugFolder.add(guiParams, 'showStats');
-debugFolder.add(guiParams, 'logWebSocket').onChange((value: boolean) => {
+debugFolder.add(guiParams, 'logWebSocket').onChange((_value: boolean) => {
   // Will be used to toggle WebSocket logging
 });
 
@@ -160,15 +177,16 @@ debugFolder.add(guiParams, 'logWebSocket').onChange((value: boolean) => {
 const devFolder = gui.addFolder('Developer');
 devFolder.add(guiParams, 'openMailbox').name('📧 Mailbox');
 
-// Send command to agent helper
+// Send command to cyber helper
 async function sendAgentCommand(agentName: string, command: string, params: any) {
   try {
-    const response = await fetch(`http://localhost:8888/agents/${agentName}/command`, {
+    const requestBody: SendCommandRequest = { command, params };
+    const response = await fetch(`http://localhost:8888/Cybers/${agentName}/command`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ command, params }),
+      body: JSON.stringify(requestBody),
     });
     
     if (!response.ok) {
@@ -179,15 +197,16 @@ async function sendAgentCommand(agentName: string, command: string, params: any)
   }
 }
 
-// Send message to agent helper
+// Send message to cyber helper
 async function sendAgentMessage(agentName: string, content: string) {
   try {
-    const response = await fetch(`http://localhost:8888/agents/${agentName}/message`, {
+    const requestBody: SendMessageRequest = { content, message_type: 'text' };
+    const response = await fetch(`http://localhost:8888/Cybers/${agentName}/message`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ content, message_type: 'text' }),
+      body: JSON.stringify(requestBody),
     });
     
     if (!response.ok) {
@@ -221,11 +240,11 @@ const mailbox = new Mailbox();
 const wsClient = new WebSocketClient('ws://localhost:8888/ws');
 
 // Handle WebSocket events
-wsClient.on('agent_created', (data: any) => {
+wsClient.on('agent_created', (data: AgentCreatedEvent) => {
   agentManager.addAgent(data.name, {
-    type: data.agent_type || 'general',
+    type: data.cyber_type || 'general',
     state: 'idle',
-    premium: data.use_premium
+    premium: (data.config as any)?.use_premium || false
   });
   updateAgentCount();
 });
@@ -235,25 +254,31 @@ wsClient.on('agent_terminated', (data: any) => {
   updateAgentCount();
 });
 
-wsClient.on('agent_state_changed', (data: any) => {
+wsClient.on('agent_state_changed', (data: AgentStateChangedEvent) => {
   agentManager.updateAgentState(data.name, data.new_state);
 });
 
-wsClient.on('file_activity', (data: any) => {
-  // Pulse the directory tower when files are accessed
+wsClient.on('file_activity', (data: FileActivityEvent) => {
+  // Pulse the directory tower when files are accessed - now with better path handling
   if (data.path) {
-    const parts = data.path.split('/');
-    if (parts.length > 2) {
-      filesystemViz.pulseDirectory(parts[2]); // e.g., 'agents', 'grid', etc.
+    console.log('File activity detected:', data.path);
+    filesystemViz.pulseDirectory(data.path);
+    
+    // If activity level is provided, update it
+    if (data.activity_level !== undefined) {
+      filesystemViz.updateDirectoryActivity(data.path, data.activity_level);
     }
   }
 });
 
-wsClient.on('agent_thinking', (data: any) => {
+wsClient.on('agent_thinking', (data: AgentThinkingEvent) => {
   // Show thought bubble above agent
   if (data.name && data.thought) {
-    console.log(`Agent ${data.name} thinking: ${data.thought}`);
-    agentManager.showThought(data.name, data.thought);
+    const thoughtText = data.token_count ? 
+      `${data.thought} (${data.token_count} tokens)` : 
+      data.thought;
+    console.log(`Agent ${data.name} thinking: ${thoughtText}`);
+    agentManager.showThought(data.name, thoughtText);
     
     // Update thought history if this agent is selected
     if (agentManager.getSelectedAgent() === data.name) {
@@ -275,7 +300,7 @@ wsClient.on('disconnected', () => {
   updateConnectionStatus('disconnected');
 });
 
-// Fetch initial agent status
+// Fetch initial cyber status
 async function fetchInitialStatus() {
   console.log('Fetching initial status...');
   try {
@@ -283,24 +308,27 @@ async function fetchInitialStatus() {
     console.log('Status response:', response.status);
     
     if (response.ok) {
-      const data = await response.json();
+      const data: StatusResponse = await response.json();
       console.log('Status data:', data);
       
-      // Add all existing agents
-      if (data.agents) {
-        console.log('Found agents:', Object.keys(data.agents));
-        Object.entries(data.agents).forEach(([name, agentData]: [string, any]) => {
-          console.log(`Adding agent ${name}:`, agentData);
+      // Add all existing cybers
+      if (data.Cybers) {
+        console.log('Found cybers:', Object.keys(data.Cybers));
+        Object.entries(data.Cybers).forEach(([name, cyberData]) => {
+          console.log(`Adding cyber ${name}:`, cyberData);
           agentManager.addAgent(name, {
-            type: agentData.type || 'general',
-            state: agentData.state?.toLowerCase() || 'unknown',
-            premium: agentData.premium || false
+            type: cyberData.type || 'general',
+            state: cyberData.state?.toLowerCase() || 'unknown',
+            premium: cyberData.premium || false
           });
         });
         updateAgentCount();
       } else {
-        console.log('No agents in status response');
+        console.log('No cybers in status response');
       }
+    } else if (response.status === 503) {
+      console.log('Server initializing, will retry...');
+      setTimeout(fetchInitialStatus, 2000);
     } else {
       console.error('Status response not OK:', response.status);
     }
@@ -438,10 +466,11 @@ function formatTime(date: Date): string {
   return date.toLocaleTimeString();
 }
 
-function hideAgentInfo() {
-  const infoEl = document.getElementById('agent-info');
-  if (infoEl) infoEl.style.display = 'none';
-}
+// Commented out unused function - can be re-enabled if needed
+// function hideAgentInfo() {
+//   const infoEl = document.getElementById('agent-info');
+//   if (infoEl) infoEl.style.display = 'none';
+// }
 
 // Handle window resize
 function onWindowResize() {

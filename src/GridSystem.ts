@@ -58,7 +58,7 @@ export class GridSystem {
     this.addAccentLines(size, divisions);
   }
 
-  private addAccentLines(size: number, divisions: number) {
+  private addAccentLines(size: number, _divisions: number) {
     const accentGeometry = new THREE.BufferGeometry();
     const vertices: number[] = [];
     

@@ -1,3 +1,5 @@
+import { MailboxMessage, MailboxResponse, CybersAllResponse } from './types';
+
 export interface Message {
   from: string;
   to: string;
@@ -8,11 +10,14 @@ export interface Message {
   _file_path?: string;
 }
 
+// Legacy interface for backward compatibility
+export type { MailboxMessage };
+
 export class Mailbox {
   private container: HTMLDivElement;
   private messagesContainer: HTMLDivElement;
   private composeContainer: HTMLDivElement;
-  private messages: Message[] = [];
+  private messages: MailboxMessage[] = [];
   private unreadCount: number = 0;
   private isVisible: boolean = false;
   
@@ -188,7 +193,7 @@ export class Mailbox {
       
       const response = await fetch('http://localhost:8888/developers/mailbox?include_read=true');
       if (response.ok) {
-        const data = await response.json();
+        const data: MailboxResponse = await response.json();
         this.messages = data.messages || [];
         this.updateMessagesDisplay();
         this.updateUnreadCount();
@@ -212,7 +217,7 @@ export class Mailbox {
     // Get list of unread messages for proper indexing
     const unreadMessages = this.messages.filter(m => !m._read);
     
-    this.messages.forEach((msg, index) => {
+    this.messages.forEach((msg, _index) => {
       const msgEl = document.createElement('div');
       msgEl.style.cssText = `
         padding: 10px;
@@ -284,22 +289,22 @@ export class Mailbox {
   
   private async updateAgentList() {
     try {
-      const response = await fetch('http://localhost:8888/agents/all');
+      const response = await fetch('http://localhost:8888/Cybers/all');
       if (response.ok) {
-        const data = await response.json();
+        const data: CybersAllResponse = await response.json();
         const select = document.getElementById('mailbox-to-select') as HTMLSelectElement;
         select.innerHTML = '';
         
-        const agents = data.agents || [];
-        agents.forEach((agent: any) => {
+        const cybers = data.Cybers || [];
+        cybers.forEach((cyber) => {
           const option = document.createElement('option');
-          option.value = agent.name || agent.agent_id;
-          option.textContent = agent.name || agent.agent_id;
+          option.value = cyber.name || cyber.agent_id;
+          option.textContent = cyber.name || cyber.agent_id;
           select.appendChild(option);
         });
       }
     } catch (error) {
-      console.error('Failed to fetch agents:', error);
+      console.error('Failed to fetch cybers:', error);
     }
   }
   
@@ -316,7 +321,7 @@ export class Mailbox {
     }
     
     try {
-      const response = await fetch(`http://localhost:8888/agents/${to}/message`, {
+      const response = await fetch(`http://localhost:8888/Cybers/${to}/message`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
