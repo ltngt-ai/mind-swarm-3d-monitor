@@ -207,6 +207,22 @@ export class FilesystemVisualizer {
     this.towerPositions.clear();
   }
   
+  // Check if a directory should be excluded from visualization
+  private isExcludedDirectory(name: string): boolean {
+    const excludedPatterns = [
+      'base_code_template',
+      '__pycache__',
+      '.git',
+      'node_modules',
+      '.venv',
+      'venv',
+      '.idea',
+      '.vscode'
+    ];
+    
+    return excludedPatterns.some(pattern => name.includes(pattern));
+  }
+  
   // Create a directory tower with sub-towers for children
   private createDirectoryTower(
     directory: FilesystemNode,
@@ -214,10 +230,23 @@ export class FilesystemVisualizer {
     showSubDirectories: boolean,
     depth: number = 0
   ): THREE.Group {
-    const colors = this.getDirectoryColors(directory.name);
+    // Skip excluded directories
+    if (this.isExcludedDirectory(directory.name)) {
+      return new THREE.Group(); // Return empty group for filtered directories
+    }
+    
+    const colors = this.getDirectoryColors(directory.name, depth);
     const activityMultiplier = directory.activity_level ? 1 + directory.activity_level * 0.5 : 1;
     const scaleFactor = Math.max(0.3, 1 - depth * 0.1); // Scale down very gradually with depth
-    const height = colors.height * activityMultiplier * scaleFactor;
+    
+    // Calculate height based on direct children count
+    const directChildCount = directory.children ? directory.children.length : 0;
+    const baseHeight = 8; // Minimum height
+    const heightPerChild = 1.5; // Additional height per child
+    const calculatedHeight = baseHeight + (directChildCount * heightPerChild);
+    
+    // Use calculated height instead of predefined height
+    const height = calculatedHeight * activityMultiplier * scaleFactor;
     
     // Create main tower
     const mainTower = depth === 0 
@@ -244,17 +273,25 @@ export class FilesystemVisualizer {
     
     // Create sub-towers for children if enabled
     if (showSubDirectories && directory.children) {
-      const childDirectories = directory.children.filter(c => c.type === 'directory');
+      // Filter out excluded directories
+      const childDirectories = directory.children.filter(c => 
+        c.type === 'directory' && 
+        !this.isExcludedDirectory(c.name)
+      );
       const subPositions = this.calculateSubDirectoryPositions(position, childDirectories.length, depth, childDirectories);
       
       let subIndex = 0;
       directory.children.forEach((child) => {
-        if (child.type === 'directory') {
+        if (child.type === 'directory' && 
+            !this.isExcludedDirectory(child.name)) {
           // Recursively create tower for subdirectory
-          this.createDirectoryTower(child, subPositions[subIndex], true, depth + 1);
+          const subTower = this.createDirectoryTower(child, subPositions[subIndex], true, depth + 1);
           
-          // Connect sub-tower to main tower with a line
-          this.createConnectionLine(position, subPositions[subIndex], colors.primary * 0.7);
+          // Only connect if tower was actually created (not filtered)
+          if (subTower.children.length > 0) {
+            // Connect sub-tower to main tower with a line (from top of parent tower)
+            this.createConnectionLine(position, subPositions[subIndex], height, colors.primary);
+          }
           
           subIndex++;
         }
@@ -305,7 +342,11 @@ export class FilesystemVisualizer {
       return 1;
     }
     
-    const childDirectories = node.children.filter(c => c.type === 'directory');
+    // Filter out excluded directories
+    const childDirectories = node.children.filter(c => 
+      c.type === 'directory' && 
+      !this.isExcludedDirectory(c.name)
+    );
     if (childDirectories.length === 0) {
       return 1;
     }
@@ -314,13 +355,43 @@ export class FilesystemVisualizer {
     return 1 + maxChildDepth + (childDirectories.length * 0.2); // Add bonus for having many children
   }
   
-  // Get color scheme for directory type
-  private getDirectoryColors(directoryName: string): { primary: number; height: number; emissive: number } {
-    // Check for cyber home pattern (e.g., "alice-home")
+  // Get color scheme based on directory depth and type
+  private getDirectoryColors(directoryName: string, depth: number = 0): { primary: number; height: number; emissive: number } {
+    // Create a depth-based color scheme that maintains visibility
+    const depthColors = [
+      { primary: 0x00ffff, emissive: 0x003333 }, // Depth 0 - Bright cyan
+      { primary: 0x00ddff, emissive: 0x002244 }, // Depth 1 - Light blue
+      { primary: 0x66aaff, emissive: 0x112244 }, // Depth 2 - Sky blue
+      { primary: 0x8899ff, emissive: 0x222244 }, // Depth 3 - Lavender blue
+      { primary: 0xaa88ff, emissive: 0x332244 }, // Depth 4 - Purple blue
+      { primary: 0xcc77ff, emissive: 0x442244 }, // Depth 5+ - Violet
+    ];
+    
+    // Special cases for specific directories
     if (directoryName.endsWith('-home')) {
-      return this.directoryColors['cyber_home'];
+      return { primary: 0xff8800, height: 18, emissive: 0x332200 };
     }
-    return this.directoryColors[directoryName] || this.directoryColors['default'];
+    
+    // Special colors for known directory types at root level
+    if (depth === 0) {
+      const specialColors: { [key: string]: { primary: number; emissive: number } } = {
+        'grid': { primary: 0x00ffff, emissive: 0x003333 },
+        'community': { primary: 0x00ff88, emissive: 0x003322 },
+        'library': { primary: 0x00aaff, emissive: 0x002244 },
+        'workshop': { primary: 0x44ffcc, emissive: 0x114433 },
+      };
+      
+      if (specialColors[directoryName]) {
+        return { ...specialColors[directoryName], height: 25 };
+      }
+    }
+    
+    // Use depth-based coloring
+    const colorIndex = Math.min(depth, depthColors.length - 1);
+    return { 
+      ...depthColors[colorIndex], 
+      height: 15 // This will be overridden by child-count-based height
+    };
   }
   
   // Create a smaller cyber home tower
@@ -415,19 +486,21 @@ export class FilesystemVisualizer {
   private createConnectionLine(
     parentPos: THREE.Vector3,
     childPos: THREE.Vector3,
+    parentHeight: number,
     color: number
   ): void {
     const points = [
-      new THREE.Vector3(parentPos.x, 3, parentPos.z),
-      new THREE.Vector3(childPos.x, 3, childPos.z)
+      new THREE.Vector3(parentPos.x, parentHeight, parentPos.z), // Start from top of parent tower
+      new THREE.Vector3(childPos.x, 5, childPos.z) // End at base-ish of child tower
     ];
     
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
     const material = new THREE.LineBasicMaterial({
       color: color,
       transparent: true,
-      opacity: 0.3,
-      blending: THREE.AdditiveBlending
+      opacity: 0.5, // Increased opacity for better visibility
+      blending: THREE.AdditiveBlending,
+      linewidth: 2 // Attempt to make lines thicker (note: may not work in WebGL)
     });
     
     const line = new THREE.Line(geometry, material);

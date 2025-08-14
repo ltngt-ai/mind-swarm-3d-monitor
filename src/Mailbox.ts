@@ -295,7 +295,7 @@ export class Mailbox {
         const select = document.getElementById('mailbox-to-select') as HTMLSelectElement;
         select.innerHTML = '';
         
-        const cybers = data.Cybers || [];
+        const cybers = data.cybers || [];
         cybers.forEach((cyber) => {
           const option = document.createElement('option');
           option.value = cyber.name || cyber.agent_id;

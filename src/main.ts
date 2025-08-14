@@ -101,14 +101,14 @@ const guiParams = {
     filesystemViz.refresh();
   },
   
-  // Agent controls
+  // Cyber controls
   selectedAgent: 'None',
   sendThinkCommand: () => {
     const selectedAgent = agentManager.getSelectedAgent();
     if (selectedAgent) {
       const thought = prompt('Enter thought for agent:');
       if (thought) {
-        sendAgentCommand(selectedAgent, 'think', { message: thought });
+        sendCyberCommand(selectedAgent, 'think', { message: thought });
       }
     }
   },
@@ -117,7 +117,7 @@ const guiParams = {
     if (selectedAgent) {
       const message = prompt('Enter message for agent:');
       if (message) {
-        sendAgentMessage(selectedAgent, message);
+        sendCyberMessage(selectedAgent, message);
       }
     }
   },
@@ -166,8 +166,8 @@ visualFolder.add(guiParams, 'showTowers').onChange((value: boolean) => {
 });
 visualFolder.add(guiParams, 'refreshFilesystem').name('🔄 Refresh Filesystem');
 
-// Agent folder
-const agentFolder = gui.addFolder('Agents');
+// Cyber folder
+const agentFolder = gui.addFolder('Cybers');
 agentFolder.add(guiParams, 'selectedAgent').listen().disable();
 agentFolder.add(guiParams, 'sendThinkCommand').name('Send Think Command');
 agentFolder.add(guiParams, 'sendMessage').name('Send Message');
@@ -185,10 +185,10 @@ devFolder.add(guiParams, 'openMailbox').name('📧 Mailbox');
 devFolder.add(guiParams, 'refreshStatus').name('🔄 Refresh Status');
 
 // Send command to cyber helper
-async function sendAgentCommand(agentName: string, command: string, params: any) {
+async function sendCyberCommand(cyberName: string, command: string, params: any) {
   try {
     const requestBody: SendCommandRequest = { command, params };
-    const response = await fetch(`http://localhost:8888/Cybers/${agentName}/command`, {
+    const response = await fetch(`http://localhost:8888/Cybers/${cyberName}/command`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -205,10 +205,10 @@ async function sendAgentCommand(agentName: string, command: string, params: any)
 }
 
 // Send message to cyber helper
-async function sendAgentMessage(agentName: string, content: string) {
+async function sendCyberMessage(cyberName: string, content: string) {
   try {
     const requestBody: SendMessageRequest = { content, message_type: 'text' };
-    const response = await fetch(`http://localhost:8888/Cybers/${agentName}/message`, {
+    const response = await fetch(`http://localhost:8888/Cybers/${cyberName}/message`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -219,7 +219,7 @@ async function sendAgentMessage(agentName: string, content: string) {
     if (!response.ok) {
       console.error('Failed to send message:', response.statusText);
     } else {
-      console.log(`Message sent to ${agentName}: ${content}`);
+      console.log(`Message sent to ${cyberName}: ${content}`);
     }
   } catch (error) {
     console.error('Error sending message:', error);
@@ -238,7 +238,7 @@ scene.add(gridSystem.mesh);
 // Filesystem visualization
 const filesystemViz = new FilesystemVisualizer(scene);
 
-// Agent manager
+// Cyber manager
 const agentManager = new AgentManager(scene);
 
 // Set filesystem visualizer reference for location-based positioning
@@ -581,7 +581,7 @@ function animate() {
   // Update controls
   controls.update();
   
-  // Update agents
+  // Update Cybers
   agentManager.update();
   
   // Update grid animation
