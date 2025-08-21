@@ -45,7 +45,7 @@ export class GridSystem {
     });
     this.gridLevels = [];
 
-    this.gridLevelConfigs.forEach((levelConfig, index) => {
+    this.gridLevelConfigs.forEach((levelConfig, _index) => {
       const level = this.createGridLevel(levelConfig.size, levelConfig.divisions, levelConfig.opacity, levelConfig.color);
       this.gridLevels.push(level);
       this.mesh.add(level.mesh);

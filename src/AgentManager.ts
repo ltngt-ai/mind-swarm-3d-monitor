@@ -350,13 +350,31 @@ export class AgentManager {
     const meshes = Array.from(this.agents.values()).map(a => a.mesh);
     const intersects = raycaster.intersectObjects(meshes, true);
     
+    console.log(`Raycasting: found ${intersects.length} intersections, checking ${meshes.length} agent meshes`);
+    
     if (intersects.length > 0) {
-      const hitMesh = intersects[0].object.parent;
+      // Try to find the agent by checking the hit object and its parents
+      const hitObject = intersects[0].object;
+      console.log('Hit object type:', hitObject.type, 'Name:', hitObject.name);
+      
       for (const [_name, agent] of this.agents) {
-        if (agent.mesh === hitMesh) {
+        // Check if the hit object is the agent mesh itself
+        if (agent.mesh === hitObject) {
+          console.log('Found agent by direct mesh match:', agent.name);
           return agent;
         }
+        
+        // Check if the hit object is a child of the agent mesh
+        let parent = hitObject.parent;
+        while (parent) {
+          if (agent.mesh === parent) {
+            console.log('Found agent by parent match:', agent.name);
+            return agent;
+          }
+          parent = parent.parent;
+        }
       }
+      console.log('Hit object found but no agent matched');
     }
     
     return null;

@@ -1,18 +1,31 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import GUI from 'lil-gui';
+
+// Core systems
 import { AgentManager } from './AgentManager';
 import { GridSystem } from './GridSystem';
 import { FilesystemVisualizer } from './FilesystemVisualizer';
 import { WebSocketClient } from './WebSocketClient';
-import { Mailbox } from './Mailbox';
+
+// Mode system
+import { ModeManager, AppMode } from './modes/ModeManager';
+import { ModeContext } from './modes/Mode';
+import { AutomaticMode } from './modes/AutomaticMode';
+import { UserMode } from './modes/UserMode';
+import { DeveloperMode } from './modes/DeveloperMode';
+
+// Camera system
+import { CameraController } from './camera/CameraController';
+
+// Event system
+import { eventBus, Events } from './utils/EventBus';
+
+// Types
 import { 
-  StatusResponse, 
-  SendCommandRequest, 
-  SendMessageRequest,
+  StatusResponse,
   AgentCreatedEvent,
   AgentStateChangedEvent,
   AgentThinkingEvent,
@@ -53,178 +66,11 @@ const bloomPass = new UnrealBloomPass(
 );
 composer.addPass(bloomPass);
 
-// Controls
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.05;
-controls.minDistance = 20;
-controls.maxDistance = 200;
-
-// WASD movement
-let moveSpeed = 0.5;
-const keys: Record<string, boolean> = {};
-
-window.addEventListener('keydown', (e) => {
-  // Ignore key events when typing in input fields
-  if (e.target instanceof HTMLInputElement || 
-      e.target instanceof HTMLTextAreaElement || 
-      e.target instanceof HTMLSelectElement) {
-    return;
-  }
-  keys[e.key.toLowerCase()] = true;
-});
-
-window.addEventListener('keyup', (e) => {
-  // Ignore key events when typing in input fields
-  if (e.target instanceof HTMLInputElement || 
-      e.target instanceof HTMLTextAreaElement || 
-      e.target instanceof HTMLSelectElement) {
-    return;
-  }
-  keys[e.key.toLowerCase()] = false;
-});
+// Initialize camera controller
+const cameraController = new CameraController(camera, renderer);
 
 // GUI Setup
 const gui = new GUI();
-const guiParams = {
-  // Camera
-  moveSpeed: 0.5,
-  autoRotate: false,
-  
-  // Visual effects
-  bloomStrength: 0.5,
-  bloomRadius: 0.4,
-  gridOpacity: 0.6,
-  showTowers: true,
-  refreshFilesystem: () => {
-    console.log('Manually refreshing filesystem structure...');
-    filesystemViz.refresh();
-  },
-  
-  // Cyber controls
-  selectedAgent: 'None',
-  sendThinkCommand: () => {
-    const selectedAgent = agentManager.getSelectedAgent();
-    if (selectedAgent) {
-      const thought = prompt('Enter thought for agent:');
-      if (thought) {
-        sendCyberCommand(selectedAgent, 'think', { message: thought });
-      }
-    }
-  },
-  sendMessage: () => {
-    const selectedAgent = agentManager.getSelectedAgent();
-    if (selectedAgent) {
-      const message = prompt('Enter message for agent:');
-      if (message) {
-        sendCyberMessage(selectedAgent, message);
-      }
-    }
-  },
-  
-  // Debug
-  showStats: false,
-  logWebSocket: false,
-  
-  // Mailbox
-  openMailbox: () => {
-    mailbox.toggle();
-  },
-  
-  // Manual refresh
-  refreshStatus: () => {
-    console.log('Manually refreshing status...');
-    fetchInitialStatus();
-  }
-};
-
-// Camera folder
-const cameraFolder = gui.addFolder('Camera');
-cameraFolder.add(guiParams, 'moveSpeed', 0.1, 2.0).onChange((value: number) => {
-  moveSpeed = value;
-});
-cameraFolder.add(guiParams, 'autoRotate').onChange((value: boolean) => {
-  controls.autoRotate = value;
-});
-cameraFolder.add(controls, 'autoRotateSpeed', 0.5, 5.0);
-
-// Visual folder
-const visualFolder = gui.addFolder('Visual Effects');
-visualFolder.add(guiParams, 'bloomStrength', 0, 2).onChange((value: number) => {
-  bloomPass.strength = value;
-});
-visualFolder.add(guiParams, 'bloomRadius', 0, 1).onChange((value: number) => {
-  bloomPass.radius = value;
-});
-visualFolder.add(guiParams, 'gridOpacity', 0, 1).onChange((value: number) => {
-  const gridChild = gridSystem.mesh.children[0] as THREE.Line;
-  const gridMaterial = gridChild.material as THREE.LineBasicMaterial;
-  gridMaterial.opacity = value;
-});
-visualFolder.add(guiParams, 'showTowers').onChange((value: boolean) => {
-  filesystemViz.setVisible(value);
-});
-visualFolder.add(guiParams, 'refreshFilesystem').name('🔄 Refresh Filesystem');
-
-// Cyber folder
-const agentFolder = gui.addFolder('Cybers');
-agentFolder.add(guiParams, 'selectedAgent').listen().disable();
-agentFolder.add(guiParams, 'sendThinkCommand').name('Send Think Command');
-agentFolder.add(guiParams, 'sendMessage').name('Send Message');
-
-// Debug folder
-const debugFolder = gui.addFolder('Debug');
-debugFolder.add(guiParams, 'showStats');
-debugFolder.add(guiParams, 'logWebSocket').onChange((_value: boolean) => {
-  // Will be used to toggle WebSocket logging
-});
-
-// Developer folder
-const devFolder = gui.addFolder('Developer');
-devFolder.add(guiParams, 'openMailbox').name('📧 Mailbox');
-devFolder.add(guiParams, 'refreshStatus').name('🔄 Refresh Status');
-
-// Send command to cyber helper
-async function sendCyberCommand(cyberName: string, command: string, params: any) {
-  try {
-    const requestBody: SendCommandRequest = { command, params };
-    const response = await fetch(`http://localhost:8888/Cybers/${cyberName}/command`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-    });
-    
-    if (!response.ok) {
-      console.error('Failed to send command:', response.statusText);
-    }
-  } catch (error) {
-    console.error('Error sending command:', error);
-  }
-}
-
-// Send message to cyber helper
-async function sendCyberMessage(cyberName: string, content: string) {
-  try {
-    const requestBody: SendMessageRequest = { content, message_type: 'text' };
-    const response = await fetch(`http://localhost:8888/Cybers/${cyberName}/message`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-    });
-    
-    if (!response.ok) {
-      console.error('Failed to send message:', response.statusText);
-    } else {
-      console.log(`Message sent to ${cyberName}: ${content}`);
-    }
-  } catch (error) {
-    console.error('Error sending message:', error);
-  }
-}
 
 // Lighting
 const ambientLight = new THREE.AmbientLight(0x0080ff, 0.1);
@@ -238,17 +84,33 @@ scene.add(gridSystem.mesh);
 // Filesystem visualization
 const filesystemViz = new FilesystemVisualizer(scene);
 
-// Cyber manager
+// Agent manager (using Cyber terminology)
 const agentManager = new AgentManager(scene);
 
 // Set filesystem visualizer reference for location-based positioning
 agentManager.setFilesystemVisualizer(filesystemViz);
 
-// Mailbox
-const mailbox = new Mailbox();
-
 // WebSocket connection
 const wsClient = new WebSocketClient('ws://localhost:8888/ws');
+
+// Create mode context
+const modeContext: ModeContext = {
+  scene,
+  camera,
+  renderer,
+  cameraController,
+  agentManager,
+  filesystemViz,
+  gridSystem,
+  wsClient,
+  gui
+};
+
+// Initialize mode manager and register modes
+const modeManager = new ModeManager(modeContext);
+modeManager.registerMode(AppMode.AUTOMATIC, new AutomaticMode(modeContext));
+modeManager.registerMode(AppMode.USER, new UserMode(modeContext));
+modeManager.registerMode(AppMode.DEVELOPER, new DeveloperMode(modeContext));
 
 // Handle WebSocket events
 wsClient.on('agent_created', (data: AgentCreatedEvent) => {
@@ -259,19 +121,36 @@ wsClient.on('agent_created', (data: AgentCreatedEvent) => {
     current_location: (data as any).current_location
   });
   updateAgentCount();
+  
+  // Emit event for modes to handle
+  eventBus.emit(Events.CYBER_ACTIVITY, { 
+    cyber: data.name, 
+    type: 'created' 
+  });
 });
 
 wsClient.on('agent_terminated', (data: any) => {
   agentManager.removeAgent(data.name);
   updateAgentCount();
+  
+  eventBus.emit(Events.CYBER_ACTIVITY, { 
+    cyber: data.name, 
+    type: 'terminated' 
+  });
 });
 
 wsClient.on('agent_state_changed', (data: AgentStateChangedEvent) => {
   agentManager.updateAgentState(data.name, data.new_state);
+  
+  eventBus.emit(Events.CYBER_ACTIVITY, { 
+    cyber: data.name, 
+    type: 'state_changed',
+    state: data.new_state 
+  });
 });
 
 wsClient.on('file_activity', (data: FileActivityEvent) => {
-  // Pulse the directory tower when files are accessed - now with better path handling
+  // Pulse the directory tower when files are accessed
   if (data.path) {
     console.log('File activity detected:', data.path);
     filesystemViz.pulseDirectory(data.path);
@@ -280,6 +159,12 @@ wsClient.on('file_activity', (data: FileActivityEvent) => {
     if (data.activity_level !== undefined) {
       filesystemViz.updateDirectoryActivity(data.path, data.activity_level);
     }
+    
+    eventBus.emit(Events.CYBER_ACTIVITY, { 
+      cyber: (data as any).cyber,
+      type: 'file_activity',
+      path: data.path 
+    });
   }
 });
 
@@ -292,13 +177,11 @@ wsClient.on('agent_thinking', (data: AgentThinkingEvent) => {
     console.log(`Agent ${data.name} thinking: ${thoughtText}`);
     agentManager.showThought(data.name, thoughtText);
     
-    // Update thought history if this agent is selected
-    if (agentManager.getSelectedAgent() === data.name) {
-      const agent = agentManager.getAgentData(data.name);
-      if (agent) {
-        showAgentInfo(agent);
-      }
-    }
+    eventBus.emit(Events.CYBER_ACTIVITY, { 
+      cyber: data.name, 
+      type: 'thinking',
+      thought: thoughtText 
+    });
   }
 });
 
@@ -307,6 +190,12 @@ wsClient.on('agent_location_changed', (data: any) => {
   if (data.name && data.new_location) {
     console.log(`Agent ${data.name} moved to: ${data.new_location}`);
     agentManager.updateAgentLocation(data.name, data.new_location);
+    
+    eventBus.emit(Events.CYBER_ACTIVITY, { 
+      cyber: data.name, 
+      type: 'location_changed',
+      location: data.new_location 
+    });
   }
 });
 
@@ -411,52 +300,41 @@ async function fetchInitialStatus() {
 // Connect WebSocket
 wsClient.connect();
 
-// Listen for mailbox updates
-window.addEventListener('mailbox-unread-count', (event: any) => {
-  const unreadEl = document.getElementById('unread-count');
-  if (unreadEl) {
-    unreadEl.textContent = event.detail.count.toString();
-    unreadEl.style.color = event.detail.count > 0 ? '#ffff00' : '#666666';
-  }
-});
-
-// Check mailbox on startup and periodically
-setTimeout(() => {
-  mailbox.refreshMessages();
-  // Refresh mailbox every 10 seconds
-  setInterval(() => {
-    mailbox.refreshMessages();
-  }, 10000);
+// UI Status Elements
+function createStatusUI() {
+  // Connection status
+  const statusContainer = document.createElement('div');
+  statusContainer.style.cssText = `
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    background: rgba(0, 20, 40, 0.8);
+    border: 1px solid #0080ff;
+    border-radius: 5px;
+    padding: 8px 12px;
+    color: #00ffff;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    z-index: 100;
+  `;
   
-  // Also periodically check for status updates (including location changes)
-  setInterval(() => {
-    fetchStatusUpdate();
-  }, 5000); // Check every 5 seconds
-}, 2000);
-
-// Raycaster for mouse interaction
-const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
-
-function onMouseClick(event: MouseEvent) {
-  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-
-  raycaster.setFromCamera(mouse, camera);
+  statusContainer.innerHTML = `
+    <div class="status-indicator" style="
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #666;
+    "></div>
+    <span id="connection-status">disconnected</span>
+    <span>|</span>
+    <span>Cybers: <span id="agent-count">0</span></span>
+  `;
   
-  const agent = agentManager.getAgentAtPosition(raycaster);
-  if (agent) {
-    // Only update selection if clicking a different agent
-    if (agentManager.getSelectedAgent() !== agent.name) {
-      agentManager.selectAgent(agent.name);
-      showAgentInfo(agent);
-      guiParams.selectedAgent = agent.name;
-    }
-  }
-  // Don't deselect when clicking empty space - keep current selection
+  document.body.appendChild(statusContainer);
 }
-
-window.addEventListener('click', onMouseClick);
 
 // UI updates
 function updateConnectionStatus(status: string) {
@@ -464,7 +342,8 @@ function updateConnectionStatus(status: string) {
   const indicatorEl = document.querySelector('.status-indicator');
   if (statusEl) statusEl.textContent = status;
   if (indicatorEl) {
-    indicatorEl.className = `status-indicator status-${status}`;
+    indicatorEl.className = `status-indicator`;
+    (indicatorEl as HTMLElement).style.background = status === 'connected' ? '#00ff00' : '#ff0000';
   }
 }
 
@@ -472,81 +351,6 @@ function updateAgentCount() {
   const countEl = document.getElementById('agent-count');
   if (countEl) countEl.textContent = agentManager.getAgentCount().toString();
 }
-
-function showAgentInfo(agent: any) {
-  const infoEl = document.getElementById('agent-info');
-  const nameEl = document.getElementById('agent-name');
-  const stateEl = document.getElementById('agent-state');
-  const typeEl = document.getElementById('agent-type');
-  const thoughtHistoryEl = document.getElementById('thought-history');
-  
-  if (infoEl && nameEl && stateEl && typeEl && thoughtHistoryEl) {
-    nameEl.textContent = agent.name;
-    stateEl.textContent = agent.state;
-    typeEl.textContent = agent.type + (agent.premium ? ' ✨' : '');
-    
-    // Get and display thought history
-    const thoughts = agentManager.getAgentThoughtHistory(agent.name);
-    thoughtHistoryEl.innerHTML = '';
-    
-    if (thoughts.length === 0) {
-      thoughtHistoryEl.innerHTML = '<div style="opacity: 0.6;">No thoughts yet...</div>';
-    } else {
-      thoughts.forEach((entry, index) => {
-        const thoughtDiv = document.createElement('div');
-        thoughtDiv.style.marginBottom = '10px';
-        thoughtDiv.style.borderBottom = '1px solid rgba(0, 255, 255, 0.2)';
-        thoughtDiv.style.paddingBottom = '8px';
-        
-        // Highlight current thought
-        if (index === 0) {
-          thoughtDiv.style.borderLeft = '2px solid #00ffff';
-          thoughtDiv.style.paddingLeft = '8px';
-          thoughtDiv.style.background = 'rgba(0, 255, 255, 0.05)';
-        }
-        
-        const timeDiv = document.createElement('div');
-        timeDiv.style.fontSize = '10px';
-        timeDiv.style.opacity = '0.6';
-        timeDiv.style.marginBottom = '4px';
-        timeDiv.textContent = (index === 0 ? 'Current - ' : '') + formatTime(entry.timestamp);
-        
-        const thoughtText = document.createElement('div');
-        thoughtText.style.wordWrap = 'break-word';
-        thoughtText.style.wordBreak = 'break-word';
-        thoughtText.style.whiteSpace = 'pre-wrap';
-        thoughtText.style.overflowWrap = 'anywhere';
-        thoughtText.textContent = entry.thought;
-        
-        thoughtDiv.appendChild(timeDiv);
-        thoughtDiv.appendChild(thoughtText);
-        thoughtHistoryEl.appendChild(thoughtDiv);
-      });
-    }
-    
-    infoEl.style.display = 'block';
-  }
-}
-
-function formatTime(date: Date): string {
-  const now = new Date();
-  const diff = now.getTime() - date.getTime();
-  const seconds = Math.floor(diff / 1000);
-  
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  
-  return date.toLocaleTimeString();
-}
-
-// Commented out unused function - can be re-enabled if needed
-// function hideAgentInfo() {
-//   const infoEl = document.getElementById('agent-info');
-//   if (infoEl) infoEl.style.display = 'none';
-// }
 
 // Handle window resize
 function onWindowResize() {
@@ -558,40 +362,46 @@ function onWindowResize() {
 
 window.addEventListener('resize', onWindowResize);
 
+// Clock for delta time
+const clock = new THREE.Clock();
+
 // Animation loop
 function animate() {
   requestAnimationFrame(animate);
   
-  // WASD movement
-  const moveVector = new THREE.Vector3();
+  const deltaTime = clock.getDelta();
   
-  if (keys['w']) moveVector.z -= moveSpeed;
-  if (keys['s']) moveVector.z += moveSpeed;
-  if (keys['a']) moveVector.x -= moveSpeed;
-  if (keys['d']) moveVector.x += moveSpeed;
+  // Update camera controller
+  cameraController.update(deltaTime);
   
-  if (moveVector.length() > 0) {
-    // Apply movement relative to camera orientation
-    moveVector.applyQuaternion(camera.quaternion);
-    moveVector.y = 0; // Keep movement horizontal
-    controls.target.add(moveVector);
-    camera.position.add(moveVector);
-  }
+  // Update current mode
+  modeManager.update(deltaTime);
   
-  // Update controls
-  controls.update();
-  
-  // Update Cybers
+  // Update core systems
   agentManager.update();
-  
-  // Update grid animation
   gridSystem.update();
-  
-  // Update filesystem animation
   filesystemViz.update();
   
   // Render with post-processing
   composer.render();
 }
 
-animate();
+// Initialize everything
+async function initialize() {
+  // Create status UI
+  createStatusUI();
+  
+  // Initialize mode manager with default mode
+  await modeManager.initialize(AppMode.USER);
+  
+  // Start periodic status updates
+  setInterval(() => {
+    fetchStatusUpdate();
+  }, 5000); // Check every 5 seconds
+  
+  // Start animation loop
+  animate();
+}
+
+// Start the application
+initialize();
