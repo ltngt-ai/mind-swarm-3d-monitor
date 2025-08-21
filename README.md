@@ -14,7 +14,7 @@ A Tron-inspired 3D visualization interface for monitoring Mind-Swarm agents in r
 ## Prerequisites
 
 - Node.js 16+ and npm
-- Mind-Swarm server running on port 8888
+- Mind-Swarm server running (default: localhost:8888)
 - Modern web browser with WebGL support
 
 ## Installation
@@ -38,6 +38,28 @@ The monitor will be available at http://localhost:5173
 1. Start your Mind-Swarm server first
 2. Launch the 3D monitor with `npm run dev`
 3. The interface will automatically connect to the WebSocket server
+
+### Connecting to Remote Servers
+
+The 3D monitor supports connecting to Mind-Swarm servers running on different machines:
+
+#### Method 1: URL Parameter
+Add the server address as a URL parameter:
+```
+http://localhost:5173/?server=192.168.1.100:8888
+http://localhost:5173/?server=myserver.local:8888
+http://localhost:5173/?server=myserver.local  (defaults to port 8888)
+```
+
+#### Method 2: Server Selector UI
+Use the server selector at the bottom-left of the screen:
+1. Enter the hostname/IP in the first field
+2. Enter the port in the second field (default: 8888)
+3. Click "Connect" to save and reconnect
+4. The server preference is saved in localStorage for future sessions
+
+#### Method 3: Build Configuration
+For production deployments, you can configure the default server in the code.
 
 ### Controls
 

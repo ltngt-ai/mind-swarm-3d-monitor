@@ -3,6 +3,7 @@
 import { ModeContext } from './Mode';
 import { UserMode } from './UserMode';
 import { eventBus, Events } from '../utils/EventBus';
+import { config } from '../config';
 
 interface LogEntry {
   timestamp: Date;
@@ -431,7 +432,7 @@ export class DeveloperMode extends UserMode {
   private connectLogStream(): void {
     // Connect to WebSocket for real-time logs
     try {
-      this.logWebSocket = new WebSocket('ws://localhost:8888/logs/stream');
+      this.logWebSocket = new WebSocket(`${config.wsUrl.replace('/ws', '/logs/stream')}`);
       
       this.logWebSocket.onmessage = (event) => {
         const log = JSON.parse(event.data);
@@ -463,7 +464,7 @@ export class DeveloperMode extends UserMode {
 
   private async fetchMetrics(): Promise<void> {
     try {
-      const response = await fetch('http://localhost:8888/metrics');
+      const response = await fetch(`${config.apiUrl}/metrics`);
       if (response.ok) {
         const metrics = await response.json();
         this.systemMetrics = metrics;
@@ -698,7 +699,7 @@ export class DeveloperMode extends UserMode {
 
   private async restartCyber(name: string): Promise<void> {
     try {
-      const response = await fetch(`http://localhost:8888/Cybers/${name}/restart`, {
+      const response = await fetch(`${config.apiUrl}/Cybers/${name}/restart`, {
         method: 'POST'
       });
       
@@ -715,7 +716,7 @@ export class DeveloperMode extends UserMode {
 
   private async pauseCyber(name: string): Promise<void> {
     try {
-      const response = await fetch(`http://localhost:8888/Cybers/${name}/pause`, {
+      const response = await fetch(`${config.apiUrl}/Cybers/${name}/pause`, {
         method: 'POST'
       });
       
@@ -732,7 +733,7 @@ export class DeveloperMode extends UserMode {
 
   private async inspectCyber(name: string): Promise<void> {
     try {
-      const response = await fetch(`http://localhost:8888/Cybers/${name}/inspect`);
+      const response = await fetch(`${config.apiUrl}/Cybers/${name}/inspect`);
       
       if (response.ok) {
         const data = await response.json();

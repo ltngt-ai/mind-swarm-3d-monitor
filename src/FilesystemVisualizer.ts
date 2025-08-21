@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { FilesystemNode, FilesystemStructure } from './types';
+import { config } from './config';
 
 interface DirectoryColors {
   [key: string]: {
@@ -20,7 +21,7 @@ export class FilesystemVisualizer {
   private time: number = 0;
   private filesystemStructure: FilesystemStructure | null = null;
   private updateInterval: NodeJS.Timeout | null = null;
-  private apiUrl: string = 'http://localhost:8888';
+  private apiUrl: string = config.apiUrl;
   
   // Color scheme for different directory types
   private directoryColors: DirectoryColors = {

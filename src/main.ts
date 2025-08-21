@@ -9,6 +9,7 @@ import { AgentManager } from './AgentManager';
 import { GridSystem } from './GridSystem';
 import { FilesystemVisualizer } from './FilesystemVisualizer';
 import { WebSocketClient } from './WebSocketClient';
+import { config, createServerSelector } from './config';
 
 // Mode system
 import { ModeManager, AppMode } from './modes/ModeManager';
@@ -90,8 +91,8 @@ const agentManager = new AgentManager(scene);
 // Set filesystem visualizer reference for location-based positioning
 agentManager.setFilesystemVisualizer(filesystemViz);
 
-// WebSocket connection
-const wsClient = new WebSocketClient('ws://localhost:8888/ws');
+// WebSocket connection using config
+const wsClient = new WebSocketClient(config.wsUrl);
 
 // Create mode context
 const modeContext: ModeContext = {
@@ -231,7 +232,7 @@ wsClient.on('disconnected', () => {
 // Fetch status update to check for changes
 async function fetchStatusUpdate() {
   try {
-    const response = await fetch('http://localhost:8888/status');
+    const response = await fetch(`${config.apiUrl}/status`);
     if (response.ok) {
       const data: StatusResponse = await response.json();
       
@@ -261,9 +262,9 @@ async function fetchStatusUpdate() {
 
 // Fetch initial cyber status
 async function fetchInitialStatus() {
-  console.log('Fetching initial status...');
+  console.log(`Fetching initial status from ${config.apiUrl}...`);
   try {
-    const response = await fetch('http://localhost:8888/status');
+    const response = await fetch(`${config.apiUrl}/status`);
     console.log('Status response:', response.status);
     
     if (response.ok) {
@@ -390,6 +391,9 @@ function animate() {
 async function initialize() {
   // Create status UI
   createStatusUI();
+  
+  // Create server selector UI
+  document.body.appendChild(createServerSelector());
   
   // Initialize mode manager with default mode
   await modeManager.initialize(AppMode.USER);

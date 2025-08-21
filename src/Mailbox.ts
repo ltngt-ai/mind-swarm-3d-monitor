@@ -1,4 +1,5 @@
 import { MailboxMessage, MailboxResponse, CybersAllResponse } from './types';
+import { config } from './config';
 
 export interface Message {
   from: string;
@@ -191,7 +192,7 @@ export class Mailbox {
         }
       }
       
-      const response = await fetch('http://localhost:8888/developers/mailbox?include_read=true');
+      const response = await fetch(`${config.apiUrl}/developers/mailbox?include_read=true`);
       if (response.ok) {
         const data: MailboxResponse = await response.json();
         this.messages = data.messages || [];
@@ -262,7 +263,7 @@ export class Mailbox {
   
   private async markAsRead(unreadIndex: number) {
     try {
-      const response = await fetch('http://localhost:8888/developers/mailbox/read', {
+      const response = await fetch(`${config.apiUrl}/developers/mailbox/read`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -289,7 +290,7 @@ export class Mailbox {
   
   private async updateAgentList() {
     try {
-      const response = await fetch('http://localhost:8888/Cybers/all');
+      const response = await fetch(`${config.apiUrl}/Cybers/all`);
       if (response.ok) {
         const data: CybersAllResponse = await response.json();
         const select = document.getElementById('mailbox-to-select') as HTMLSelectElement;
@@ -321,7 +322,7 @@ export class Mailbox {
     }
     
     try {
-      const response = await fetch(`http://localhost:8888/Cybers/${to}/message`, {
+      const response = await fetch(`${config.apiUrl}/Cybers/${to}/message`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

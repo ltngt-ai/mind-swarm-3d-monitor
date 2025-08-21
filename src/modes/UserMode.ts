@@ -3,6 +3,7 @@ import { Mode, ModeContext } from './Mode';
 import { CameraMode } from '../camera/CameraController';
 import { Mailbox } from '../Mailbox';
 import { eventBus, Events } from '../utils/EventBus';
+import { config } from '../config';
 
 export class UserMode extends Mode {
   // private cameraController?: CameraController;
@@ -308,7 +309,7 @@ export class UserMode extends Mode {
 
   private async sendMessageToCyber(cyberName: string, content: string): Promise<void> {
     try {
-      const response = await fetch(`http://localhost:8888/Cybers/${cyberName}/message`, {
+      const response = await fetch(`${config.apiUrl}/Cybers/${cyberName}/message`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
