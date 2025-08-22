@@ -327,7 +327,17 @@ export class CyberInfoWindow {
     
     cycleInput.addEventListener('change', (e) => {
       const target = e.target as HTMLInputElement;
-      this.selectedCycle = parseInt(target.value) || 0;
+      let newCycle = parseInt(target.value) || 1;
+      
+      // Clamp to valid range
+      if (newCycle < 1) {
+        newCycle = 1;
+      } else if (newCycle > this.currentCycle) {
+        newCycle = this.currentCycle;
+      }
+      
+      this.selectedCycle = newCycle;
+      target.value = this.selectedCycle.toString();  // Update input if clamped
       this.fetchCycleData(this.selectedCycle);
     });
     
@@ -566,7 +576,13 @@ export class CyberInfoWindow {
   
   private navigateCycle(direction: number) {
     this.selectedCycle += direction;
-    if (this.selectedCycle < 1) this.selectedCycle = 1;
+    
+    // Clamp to valid range (1 to currentCycle)
+    if (this.selectedCycle < 1) {
+      this.selectedCycle = 1;
+    } else if (this.selectedCycle > this.currentCycle) {
+      this.selectedCycle = this.currentCycle;
+    }
     
     const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
     cycleInput.value = this.selectedCycle.toString();
