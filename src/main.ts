@@ -24,12 +24,14 @@ import { CameraController } from './camera/CameraController';
 // Event system
 import { eventBus, Events } from './utils/EventBus';
 
+// UI Components
+import { CyberInfoWindow } from './ui/CyberInfoWindow';
+
 // Types
 import { 
   StatusResponse,
   AgentCreatedEvent,
   AgentStateChangedEvent,
-  AgentThinkingEvent,
   FileActivityEvent
 } from './types';
 
@@ -350,6 +352,9 @@ async function fetchInitialStatus() {
 // Connect WebSocket
 wsClient.connect();
 
+// Create info window instance
+let cyberInfoWindow: CyberInfoWindow;
+
 // UI Status Elements
 function createStatusUI() {
   // Connection status
@@ -444,8 +449,31 @@ async function initialize() {
   // Create server selector UI
   document.body.appendChild(createServerSelector());
   
+  // Initialize CyberInfoWindow
+  cyberInfoWindow = new CyberInfoWindow(wsClient, agentManager);
+  
   // Initialize mode manager with default mode
   await modeManager.initialize(AppMode.USER);
+  
+  // Add click handler for selecting cybers
+  renderer.domElement.addEventListener('click', (event) => {
+    const mouse = new THREE.Vector2(
+      (event.clientX / window.innerWidth) * 2 - 1,
+      -(event.clientY / window.innerHeight) * 2 + 1
+    );
+    
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(mouse, camera);
+    
+    const selectedAgent = agentManager.getAgentAtPosition(raycaster);
+    if (selectedAgent) {
+      agentManager.selectAgent(selectedAgent.name);
+      cyberInfoWindow.selectCyber(selectedAgent.name);
+    } else {
+      agentManager.selectAgent(null);
+      cyberInfoWindow.hide();
+    }
+  });
   
   // Start periodic status updates
   setInterval(() => {
