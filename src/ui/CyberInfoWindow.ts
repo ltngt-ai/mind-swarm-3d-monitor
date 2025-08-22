@@ -33,8 +33,11 @@ export class CyberInfoWindow {
   private windowX = window.innerWidth - 420;
   private windowY = 80;
   
+  private isResizing = false;
+  private resizeStart = { x: 0, y: 0, width: 0, height: 0 };
+  private textZoom = 1.0;  // Default zoom level
+  
   private isFollowing = false;
-  private isMinimized = false;
   
   constructor(wsClient: WebSocketClient, _agentManager: AgentManager) {
     this.wsClient = wsClient;
@@ -48,16 +51,17 @@ export class CyberInfoWindow {
       right: 20px;
       top: 80px;
       width: 400px;
-      background: rgba(0, 20, 40, 0.95);
-      border: 2px solid #00ffff;
-      border-radius: 8px;
+      background: rgba(0, 20, 40, 0.98);
+      border: 1px solid #0080ff;
+      border-radius: 0;
       font-family: 'Courier New', monospace;
       font-size: 12px;
       color: #00ffff;
       z-index: 1000;
       display: none;
       backdrop-filter: blur(10px);
-      box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
+      box-shadow: 0 0 20px rgba(0, 255, 255, 0.3), 0 4px 8px rgba(0,0,0,0.5);
+      overflow: hidden;
     `;
     
     this.setupWindow();
@@ -71,32 +75,41 @@ export class CyberInfoWindow {
     this.container.innerHTML = `
       <!-- Title Bar -->
       <div class="window-titlebar" style="
-        background: linear-gradient(90deg, #0080ff, #00ffff);
-        padding: 8px;
+        background: linear-gradient(180deg, #1a5f7a 0%, #0a3a4a 100%);
+        border: 1px solid #00ffff;
+        border-bottom: 2px solid #0080ff;
+        padding: 6px 10px;
         display: flex;
         justify-content: space-between;
         align-items: center;
         cursor: move;
-        border-radius: 6px 6px 0 0;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), 0 2px 4px rgba(0,0,0,0.3);
       ">
-        <span style="color: #001133; font-weight: bold;" id="cyber-name">No Cyber Selected</span>
-        <div class="window-controls" style="display: flex; gap: 8px;">
-          <button class="win-btn" id="btn-minimize" style="
-            background: #ffff00;
-            border: none;
-            width: 16px;
-            height: 16px;
-            border-radius: 50%;
+        <span style="color: #00ffff; font-weight: bold; text-shadow: 0 0 5px rgba(0,255,255,0.5);" id="cyber-name">No Cyber Selected</span>
+        <div class="window-controls" style="display: flex; gap: 8px; align-items: center;">
+          <button class="win-btn" id="btn-zoom-out" style="
+            background: rgba(0, 255, 255, 0.2);
+            border: 1px solid #00ffff;
+            color: #00ffff;
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
             cursor: pointer;
-          ">−</button>
-          <button class="win-btn" id="btn-maximize" style="
-            background: #00ff00;
-            border: none;
-            width: 16px;
-            height: 16px;
-            border-radius: 50%;
+            font-size: 16px;
+            line-height: 1;
+          " title="Zoom Out">−</button>
+          <span id="zoom-level" style="color: #00ffff; font-size: 12px; min-width: 40px; text-align: center;">100%</span>
+          <button class="win-btn" id="btn-zoom-in" style="
+            background: rgba(0, 255, 255, 0.2);
+            border: 1px solid #00ffff;
+            color: #00ffff;
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
             cursor: pointer;
-          ">□</button>
+            font-size: 16px;
+            line-height: 1;
+          " title="Zoom In">+</button>
           <button class="win-btn" id="btn-close" style="
             background: #ff0080;
             border: none;
@@ -104,6 +117,7 @@ export class CyberInfoWindow {
             height: 16px;
             border-radius: 50%;
             cursor: pointer;
+            margin-left: 8px;
           ">×</button>
         </div>
       </div>
@@ -273,6 +287,18 @@ export class CyberInfoWindow {
         <span id="status-text">Ready</span>
         <span id="last-update">--:--:--</span>
       </div>
+      
+      <!-- Resize Handle -->
+      <div id="resize-handle" style="
+        position: absolute;
+        bottom: 2px;
+        right: 2px;
+        width: 12px;
+        height: 12px;
+        cursor: nwse-resize;
+        background: linear-gradient(135deg, transparent 60%, rgba(0,255,255,0.3) 60%);
+        z-index: 10;
+      "></div>
     `;
     
     this.setupControls();
@@ -281,7 +307,9 @@ export class CyberInfoWindow {
   private setupControls() {
     const titleBar = this.container.querySelector('.window-titlebar') as HTMLElement;
     const btnClose = this.container.querySelector('#btn-close') as HTMLButtonElement;
-    const btnMinimize = this.container.querySelector('#btn-minimize') as HTMLButtonElement;
+    const btnZoomIn = this.container.querySelector('#btn-zoom-in') as HTMLButtonElement;
+    const btnZoomOut = this.container.querySelector('#btn-zoom-out') as HTMLButtonElement;
+    const resizeHandle = this.container.querySelector('#resize-handle') as HTMLElement;
     const btnFollow = this.container.querySelector('#btn-follow') as HTMLButtonElement;
     const btnMessage = this.container.querySelector('#btn-message') as HTMLButtonElement;
     const btnRefresh = this.container.querySelector('#btn-refresh') as HTMLButtonElement;
@@ -299,7 +327,7 @@ export class CyberInfoWindow {
     });
     
     document.addEventListener('mousemove', (e) => {
-      if (this.isDragging) {
+      if (this.isDragging && !this.isResizing) {
         this.windowX = e.clientX - this.dragStartX;
         this.windowY = e.clientY - this.dragStartY;
         this.container.style.left = `${this.windowX}px`;
@@ -310,11 +338,38 @@ export class CyberInfoWindow {
     
     document.addEventListener('mouseup', () => {
       this.isDragging = false;
+      this.isResizing = false;
     });
     
     // Window controls
     btnClose.addEventListener('click', () => this.hide());
-    btnMinimize.addEventListener('click', () => this.toggleMinimize());
+    
+    // Zoom controls
+    btnZoomIn.addEventListener('click', () => this.adjustZoom(0.1));
+    btnZoomOut.addEventListener('click', () => this.adjustZoom(-0.1));
+    
+    // Window resizing
+    resizeHandle.addEventListener('mousedown', (e) => {
+      this.isResizing = true;
+      this.resizeStart = {
+        x: e.clientX,
+        y: e.clientY,
+        width: this.container.offsetWidth,
+        height: this.container.offsetHeight
+      };
+      e.preventDefault();
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+      if (this.isResizing) {
+        const deltaX = e.clientX - this.resizeStart.x;
+        const deltaY = e.clientY - this.resizeStart.y;
+        const newWidth = Math.max(300, this.resizeStart.width + deltaX);
+        const newHeight = Math.max(200, this.resizeStart.height + deltaY);
+        this.container.style.width = `${newWidth}px`;
+        this.container.style.height = `${newHeight}px`;
+      }
+    });
     
     // Action buttons
     btnFollow.addEventListener('click', () => this.toggleFollow());
@@ -380,8 +435,42 @@ export class CyberInfoWindow {
     this.wsClient.on('cycle_data', (data: any) => {
       console.log('Received cycle_data:', data);
       if (data.cyber === this.selectedCyber && data.cycle_number !== undefined) {
-        this.cycleData.set(data.cycle_number, data.data);
-        if (data.cycle_number === this.selectedCycle) {
+        // Check what stages are in the data
+        const stages = data.data ? Object.keys(data.data) : [];
+        console.log(`Cycle ${data.cycle_number} has stages:`, stages);
+        
+        // Check if cycle is complete by looking at metadata
+        const metadata = data.data?.metadata;
+        const isComplete = metadata?.status === 'completed';
+        
+        // Only cache if we have valid data with all main stages or if marked complete
+        // We need all 4 main stages for a complete cycle
+        const mainStages = ['observation', 'decision', 'execution', 'reflection'];
+        const hasAllMainStages = mainStages.every(stage => stages.includes(stage));
+        
+        // Only cache if:
+        // 1. Cycle is marked as complete in metadata, OR
+        // 2. We have ALL 4 main stages (observation, decision, execution, reflection)
+        if (data.data && (isComplete || hasAllMainStages)) {
+          console.log(`Caching cycle ${data.cycle_number} (complete: ${isComplete}, hasAll: ${hasAllMainStages})`);
+          this.cycleData.set(data.cycle_number, data.data);
+        } else {
+          console.warn(`Not caching incomplete cycle ${data.cycle_number}. Has: ${stages.join(', ')}, Complete: ${isComplete}`);
+          // Don't cache incomplete data
+          // If this is the current cycle and it's incomplete, schedule a retry
+          if (data.cycle_number === this.selectedCycle) {
+            console.log(`Cycle ${data.cycle_number} is incomplete, will retry in 1s...`);
+            setTimeout(() => {
+              // Only retry if still on the same cycle
+              if (this.selectedCycle === data.cycle_number) {
+                console.log(`Retrying cycle ${data.cycle_number}...`);
+                this.fetchCycleData(data.cycle_number, true);
+              }
+            }, 1000);
+          }
+        }
+        
+        if (data.cycle_number === this.selectedCycle && this.cycleData.has(data.cycle_number)) {
           this.displayStageData();
         }
       }
@@ -655,7 +744,7 @@ export class CyberInfoWindow {
     }
   }
   
-  private fetchCycleData(cycleNumber: number) {
+  private fetchCycleData(cycleNumber: number, forceRefresh: boolean = false) {
     if (!this.selectedCyber) return;
     
     // Don't fetch invalid cycle numbers
@@ -664,11 +753,23 @@ export class CyberInfoWindow {
       return;
     }
     
-    // Check cache first
-    if (this.cycleData.has(cycleNumber)) {
-      console.log(`Using cached data for cycle ${cycleNumber}`);
-      this.displayStageData();
-      return;
+    // Check cache first (unless forcing refresh)
+    if (!forceRefresh && this.cycleData.has(cycleNumber)) {
+      const cachedData = this.cycleData.get(cycleNumber);
+      // Check if cached data has ALL main stages or is marked complete
+      const stages = Object.keys(cachedData || {});
+      const mainStages = ['observation', 'decision', 'execution', 'reflection'];
+      const hasAllMainStages = mainStages.every(stage => stages.includes(stage));
+      const isComplete = cachedData?.metadata?.status === 'completed';
+      
+      if (isComplete || hasAllMainStages) {
+        console.log(`Using cached data for cycle ${cycleNumber} (complete: ${isComplete}, stages: ${stages.join(', ')})`);
+        this.displayStageData();
+        return;
+      } else {
+        console.log(`Cached data for cycle ${cycleNumber} is incomplete, re-fetching... Has: ${stages.join(', ')}`);
+        this.cycleData.delete(cycleNumber);  // Remove incomplete data
+      }
     }
     
     // Request from server
@@ -703,20 +804,31 @@ export class CyberInfoWindow {
     }
   }
   
-  private toggleMinimize() {
-    this.isMinimized = !this.isMinimized;
-    const content = this.container.querySelector('#info-content') as HTMLElement;
-    const controls = this.container.querySelectorAll('.action-buttons, .cycle-nav, .stage-selector') as NodeListOf<HTMLElement>;
+  private adjustZoom(delta: number) {
+    this.textZoom = Math.max(0.5, Math.min(2.0, this.textZoom + delta));
     
-    if (this.isMinimized) {
-      content.style.display = 'none';
-      controls.forEach(el => el.style.display = 'none');
-      this.container.style.height = 'auto';
-    } else {
-      content.style.display = 'block';
-      controls.forEach(el => el.style.display = 'flex');
-      this.container.style.height = 'auto';
+    // Update zoom level display
+    const zoomLevelEl = this.container.querySelector('#zoom-level') as HTMLElement;
+    if (zoomLevelEl) {
+      zoomLevelEl.textContent = `${Math.round(this.textZoom * 100)}%`;
     }
+    
+    // Apply zoom to content
+    const content = this.container.querySelector('#info-content') as HTMLElement;
+    if (content) {
+      content.style.fontSize = `${11 * this.textZoom}px`;
+    }
+    
+    // Apply zoom to other text elements
+    const statusBar = this.container.querySelector('.status-bar') as HTMLElement;
+    if (statusBar) {
+      statusBar.style.fontSize = `${10 * this.textZoom}px`;
+    }
+    
+    const stageButtons = this.container.querySelectorAll('.stage-btn') as NodeListOf<HTMLElement>;
+    stageButtons.forEach(btn => {
+      btn.style.fontSize = `${11 * this.textZoom}px`;
+    });
   }
   
   private openMessageDialog() {
@@ -727,7 +839,8 @@ export class CyberInfoWindow {
   
   private refreshData() {
     if (this.selectedCyber && this.selectedCycle > 0 && this.selectedCycle < 999) {
-      this.fetchCycleData(this.selectedCycle);
+      // Force refresh bypasses cache
+      this.fetchCycleData(this.selectedCycle, true);
       this.updateStatus('Refreshing data...');
     }
   }
