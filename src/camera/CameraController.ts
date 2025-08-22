@@ -179,7 +179,10 @@ export class CameraController {
     switch (this.currentMode) {
       case CameraMode.ORBIT:
       case CameraMode.FREE:
-        this.orbitControls.update();
+        // Only update orbit controls if they're enabled
+        if (this.orbitControls.enabled) {
+          this.orbitControls.update();
+        }
         break;
         
       case CameraMode.FOLLOW:
@@ -189,6 +192,8 @@ export class CameraController {
         break;
         
       case CameraMode.CINEMATIC:
+        // Ensure orbit controls don't interfere
+        this.orbitControls.enabled = false;
         if (this.cinematicPath) {
           this.updateCinematic(deltaTime);
         }
@@ -240,6 +245,12 @@ export class CameraController {
   }
 
   // Public methods for manual camera control
+  moveCamera(moveVector: THREE.Vector3): void {
+    // Move both camera and orbit control target together
+    this.camera.position.add(moveVector);
+    this.orbitControls.target.add(moveVector);
+  }
+  
   moveForward(distance: number): void {
     const direction = new THREE.Vector3();
     this.camera.getWorldDirection(direction);

@@ -219,6 +219,31 @@ wsClient.on('status_update', (data: any) => {
   }
 });
 
+// Handle cycle started events - fetch reflection for display
+wsClient.on('cycle_started', (data: any) => {
+  if (data.cyber && data.cycle_number) {
+    console.log(`Cycle ${data.cycle_number} started for ${data.cyber}, fetching reflection...`);
+    // Request the reflection from the previous cycle (cycle_number - 1)
+    if (data.cycle_number > 1) {
+      const requestId = `ref_${data.cyber}_${Date.now()}`;
+      wsClient.requestCurrentReflection(data.cyber, requestId);
+    }
+  }
+});
+
+// Handle reflection responses
+wsClient.on('current_reflection', (data: any) => {
+  if (data.cyber && data.reflection) {
+    // Show reflection in thought bubble
+    const reflectionText = typeof data.reflection === 'string' 
+      ? data.reflection 
+      : data.reflection.reflection || JSON.stringify(data.reflection);
+    
+    console.log(`Showing reflection for ${data.cyber}: ${reflectionText.substring(0, 100)}...`);
+    agentManager.showThought(data.cyber, `📝 ${reflectionText}`);
+  }
+});
+
 wsClient.on('connected', () => {
   updateConnectionStatus('connected');
   // Fetch initial status

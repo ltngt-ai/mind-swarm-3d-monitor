@@ -214,14 +214,8 @@ export class UserMode extends Mode {
       moveVector.applyQuaternion(this.context.camera.quaternion);
       moveVector.y = 0; // Keep movement horizontal
       
-      // Move camera
-      this.context.camera.position.add(moveVector);
-      
-      // If using orbit controls, move target too
-      // if (this.cameraController) {
-      //   const controls = this.cameraController.getOrbitControls();
-      //   controls.target.add(moveVector);
-      // }
+      // Move camera and its target together
+      this.context.cameraController.moveCamera(moveVector);
     }
   }
 

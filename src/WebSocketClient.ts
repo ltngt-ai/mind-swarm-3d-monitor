@@ -80,6 +80,14 @@ export class WebSocketClient {
     }
   }
 
+  requestCurrentReflection(cyberName: string, requestId?: string) {
+    this.send({
+      type: 'get_current_reflection',
+      cyber: cyberName,
+      request_id: requestId || `ref_${Date.now()}`
+    });
+  }
+
   on(event: string, handler: EventHandler) {
     if (!this.eventHandlers.has(event)) {
       this.eventHandlers.set(event, []);
