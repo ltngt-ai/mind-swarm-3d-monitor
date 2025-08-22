@@ -22,8 +22,8 @@ export class CyberInfoWindow {
   private wsClient: WebSocketClient;
   
   private selectedCyber: string | null = null;
-  private currentCycle: number = 0;
-  private selectedCycle: number = 0;
+  private currentCycle: number = 1;  // Start at 1 since cycle 0 usually doesn't exist
+  private selectedCycle: number = 1;  // Start at 1
   private selectedStage: string = 'observation';
   private cycleData: Map<number, CycleData> = new Map();
   
@@ -358,19 +358,28 @@ export class CyberInfoWindow {
     this.wsClient.on('cycles_list', (data: any) => {
       console.log('Received cycles_list:', data);
       if (data.cyber === this.selectedCyber && data.cycles) {
-        // Get the latest cycle number from the list
+        // Get the latest valid cycle number from the list (filter out cycle 0)
         if (data.cycles.length > 0) {
-          this.currentCycle = Math.max(...data.cycles.map((c: any) => 
-            typeof c === 'number' ? c : c.cycle_number || 0
-          ));
-          this.selectedCycle = this.currentCycle;
+          const validCycles = data.cycles
+            .map((c: any) => typeof c === 'number' ? c : c.cycle_number || 0)
+            .filter((n: number) => n > 0);  // Skip cycle 0 as it's usually incomplete
+          
+          if (validCycles.length > 0) {
+            this.currentCycle = Math.max(...validCycles);
+            this.selectedCycle = this.currentCycle;
+          } else {
+            // Fallback to 1 if no valid cycles
+            this.currentCycle = 1;
+            this.selectedCycle = 1;
+          }
+          
           const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
           if (cycleInput) {
             cycleInput.value = this.selectedCycle.toString();
           }
           this.updateCycleStatus();
           // Fetch the current cycle data
-          this.fetchCycleData(this.currentCycle);
+          this.fetchCycleData(this.selectedCycle);
         }
       }
     });
@@ -412,15 +421,20 @@ export class CyberInfoWindow {
     const nameEl = this.container.querySelector('#cyber-name') as HTMLElement;
     nameEl.textContent = `Cyber: ${cyberName}`;
     
-    // Request current cycle info
+    // Request cycles list to get the latest valid cycle
     this.wsClient.send({
       type: 'get_cycles',
       cyber: cyberName,
-      limit: 10
+      limit: 100,  // Get more cycles to find valid ones
+      request_id: `cycles_select_${Date.now()}`
     });
     
-    // Go to current cycle
-    this.goToCurrentCycle();
+    // Also request current reflection which will give us the actual current cycle
+    this.wsClient.send({
+      type: 'get_current_reflection',
+      cyber: cyberName,
+      request_id: `reflection_select_${Date.now()}`
+    });
   }
   
   private selectStage(stage: string) {
@@ -562,7 +576,15 @@ export class CyberInfoWindow {
   
   private goToCurrentCycle() {
     if (this.selectedCyber) {
-      // Request current cycle
+      // First request cycles list to get the latest valid cycle
+      this.wsClient.send({
+        type: 'get_cycles',
+        cyber: this.selectedCyber,
+        limit: 10,
+        request_id: `cycles_${Date.now()}`
+      });
+      
+      // Also request current reflection
       this.wsClient.send({
         type: 'get_current_reflection',
         cyber: this.selectedCyber,
