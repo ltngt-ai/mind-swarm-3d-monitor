@@ -123,6 +123,9 @@ wsClient.on('agent_created', (data: AgentCreatedEvent) => {
   });
   updateAgentCount();
   
+  // Fetch initial reflection for this cyber
+  wsClient.requestCurrentReflection(data.name, `init_${data.name}_${Date.now()}`);
+  
   // Emit event for modes to handle
   eventBus.emit(Events.CYBER_ACTIVITY, { 
     cyber: data.name, 
@@ -169,22 +172,23 @@ wsClient.on('file_activity', (data: FileActivityEvent) => {
   }
 });
 
-wsClient.on('agent_thinking', (data: AgentThinkingEvent) => {
-  // Show thought bubble above agent
-  if (data.name && data.thought) {
-    const thoughtText = data.token_count ? 
-      `${data.thought} (${data.token_count} tokens)` : 
-      data.thought;
-    console.log(`Agent ${data.name} thinking: ${thoughtText}`);
-    agentManager.showThought(data.name, thoughtText);
-    
-    eventBus.emit(Events.CYBER_ACTIVITY, { 
-      cyber: data.name, 
-      type: 'thinking',
-      thought: thoughtText 
-    });
-  }
-});
+// Disabled - we now show reflections instead of real-time thoughts
+// wsClient.on('agent_thinking', (data: AgentThinkingEvent) => {
+//   // Show thought bubble above agent
+//   if (data.name && data.thought) {
+//     const thoughtText = data.token_count ? 
+//       `${data.thought} (${data.token_count} tokens)` : 
+//       data.thought;
+//     console.log(`Agent ${data.name} thinking: ${thoughtText}`);
+//     agentManager.showThought(data.name, thoughtText);
+//     
+//     eventBus.emit(Events.CYBER_ACTIVITY, { 
+//       cyber: data.name, 
+//       type: 'thinking',
+//       thought: thoughtText 
+//     });
+//   }
+// });
 
 // Handle agent location changes
 wsClient.on('agent_location_changed', (data: any) => {
@@ -234,13 +238,30 @@ wsClient.on('cycle_started', (data: any) => {
 // Handle reflection responses
 wsClient.on('current_reflection', (data: any) => {
   if (data.cyber && data.reflection) {
-    // Show reflection in thought bubble
-    const reflectionText = typeof data.reflection === 'string' 
-      ? data.reflection 
-      : data.reflection.reflection || JSON.stringify(data.reflection);
+    // The server now sends the insights directly as a string
+    let reflectionText = data.reflection;
     
-    console.log(`Showing reflection for ${data.cyber}: ${reflectionText.substring(0, 100)}...`);
-    agentManager.showThought(data.cyber, `📝 ${reflectionText}`);
+    // If it's still an object for some reason, extract insights
+    if (typeof reflectionText === 'object') {
+      reflectionText = reflectionText.insights || JSON.stringify(reflectionText);
+    }
+    
+    // Clean up multiline formatting
+    if (typeof reflectionText === 'string') {
+      // Remove leading "- " from bullet points for cleaner display
+      reflectionText = reflectionText.replace(/^- /gm, '• ');
+      // Truncate if too long
+      if (reflectionText.length > 300) {
+        reflectionText = reflectionText.substring(0, 297) + '...';
+      }
+    }
+    
+    console.log(`Showing reflection for ${data.cyber}:`, reflectionText);
+    agentManager.showThought(data.cyber, reflectionText);
+  } else if (data.cyber) {
+    // No reflection available yet
+    console.log(`No reflection available for ${data.cyber} yet`);
+    agentManager.showThought(data.cyber, 'Awaiting first reflection...');
   }
 });
 
@@ -307,6 +328,9 @@ async function fetchInitialStatus() {
             premium: cyberData.premium || false,
             current_location: cyberData.current_location
           });
+          
+          // Fetch initial reflection for each cyber
+          wsClient.requestCurrentReflection(name, `init_${name}_${Date.now()}`);
         });
         updateAgentCount();
       } else {
