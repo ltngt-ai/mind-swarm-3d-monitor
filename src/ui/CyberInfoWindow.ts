@@ -162,7 +162,7 @@ export class CyberInfoWindow {
         ">◀</button>
         <div style="flex: 1; text-align: center;">
           <span>Cycle </span>
-          <input type="number" id="cycle-number" value="0" style="
+          <input type="number" id="cycle-number" value="1" style="
             background: rgba(0, 255, 255, 0.1);
             border: 1px solid #00ffff;
             color: #00ffff;
@@ -255,7 +255,7 @@ export class CyberInfoWindow {
         line-height: 1.4;
       ">
         <div style="color: #666; text-align: center; padding: 20px;">
-          Select a cyber to view information
+          Loading cyber data...
         </div>
       </div>
       
@@ -397,16 +397,20 @@ export class CyberInfoWindow {
     // Listen for current reflection response (contains cycle info)
     this.wsClient.on('current_reflection', (data: any) => {
       console.log('Received current_reflection:', data);
-      if (data.cyber === this.selectedCyber && data.cycle_number) {
-        this.currentCycle = data.cycle_number;
-        this.selectedCycle = data.cycle_number;
+      if (data.cyber === this.selectedCyber) {
+        // Skip cycle 0 if that's what we get
+        const cycleNum = data.cycle_number || 1;
+        const validCycle = cycleNum > 0 ? cycleNum : 1;
+        
+        this.currentCycle = validCycle;
+        this.selectedCycle = validCycle;
         const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
         if (cycleInput) {
           cycleInput.value = this.selectedCycle.toString();
         }
         this.updateCycleStatus();
         // Fetch the full cycle data
-        this.fetchCycleData(this.currentCycle);
+        this.fetchCycleData(this.selectedCycle);
       }
     });
     
