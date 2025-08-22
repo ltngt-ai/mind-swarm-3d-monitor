@@ -1,5 +1,6 @@
 import { WebSocketClient } from '../WebSocketClient';
 import { AgentManager } from '../AgentManager';
+import { CameraController, CameraMode } from '../camera/CameraController';
 
 export interface CycleData {
   cycle_number: number;
@@ -20,6 +21,8 @@ export interface CycleData {
 export class CyberInfoWindow {
   private container: HTMLDivElement;
   private wsClient: WebSocketClient;
+  private agentManager: AgentManager;
+  private cameraController: CameraController | null = null;
   
   private selectedCyber: string | null = null;
   private currentCycle: number = 0;  // Will be set when we get actual data
@@ -39,9 +42,10 @@ export class CyberInfoWindow {
   
   private isFollowing = false;
   
-  constructor(wsClient: WebSocketClient, _agentManager: AgentManager) {
+  constructor(wsClient: WebSocketClient, agentManager: AgentManager, cameraController?: CameraController) {
     this.wsClient = wsClient;
-    // agentManager may be used in future for agent-specific operations
+    this.agentManager = agentManager;
+    this.cameraController = cameraController || null;
     
     // Create the window container
     this.container = document.createElement('div');
@@ -50,18 +54,21 @@ export class CyberInfoWindow {
       position: fixed;
       right: 20px;
       top: 80px;
-      width: 400px;
+      width: 520px;
+      height: 650px;
       background: rgba(0, 20, 40, 0.98);
       border: 1px solid #0080ff;
       border-radius: 0;
       font-family: 'Courier New', monospace;
-      font-size: 12px;
+      font-size: 16px;
       color: #00ffff;
       z-index: 1000;
       display: none;
       backdrop-filter: blur(10px);
       box-shadow: 0 0 20px rgba(0, 255, 255, 0.3), 0 4px 8px rgba(0,0,0,0.5);
       overflow: hidden;
+      display: none;
+      flex-direction: column;
     `;
     
     this.setupWindow();
@@ -98,7 +105,7 @@ export class CyberInfoWindow {
             font-size: 16px;
             line-height: 1;
           " title="Zoom Out">−</button>
-          <span id="zoom-level" style="color: #00ffff; font-size: 12px; min-width: 40px; text-align: center;">100%</span>
+          <span id="zoom-level" style="color: #00ffff; font-size: 14px; min-width: 40px; text-align: center;">100%</span>
           <button class="win-btn" id="btn-zoom-in" style="
             background: rgba(0, 255, 255, 0.2);
             border: 1px solid #00ffff;
@@ -221,7 +228,7 @@ export class CyberInfoWindow {
           padding: 5px 10px;
           border-radius: 4px;
           cursor: pointer;
-          font-size: 11px;
+          font-size: 14px;
         ">Observation</button>
         <button class="stage-btn" data-stage="decision" style="
           background: rgba(0, 128, 255, 0.2);
@@ -230,7 +237,7 @@ export class CyberInfoWindow {
           padding: 5px 10px;
           border-radius: 4px;
           cursor: pointer;
-          font-size: 11px;
+          font-size: 14px;
         ">Decision</button>
         <button class="stage-btn" data-stage="execution" style="
           background: rgba(0, 128, 255, 0.2);
@@ -239,7 +246,7 @@ export class CyberInfoWindow {
           padding: 5px 10px;
           border-radius: 4px;
           cursor: pointer;
-          font-size: 11px;
+          font-size: 14px;
         ">Execution</button>
         <button class="stage-btn" data-stage="reflection" style="
           background: rgba(0, 128, 255, 0.2);
@@ -248,7 +255,7 @@ export class CyberInfoWindow {
           padding: 5px 10px;
           border-radius: 4px;
           cursor: pointer;
-          font-size: 11px;
+          font-size: 14px;
         ">Reflection</button>
         <button class="stage-btn" data-stage="cleanup" style="
           background: rgba(0, 128, 255, 0.2);
@@ -257,17 +264,18 @@ export class CyberInfoWindow {
           padding: 5px 10px;
           border-radius: 4px;
           cursor: pointer;
-          font-size: 11px;
+          font-size: 14px;
         ">Cleanup</button>
       </div>
       
       <!-- Content Area -->
       <div id="info-content" style="
         padding: 15px;
-        max-height: 400px;
+        flex: 1;
         overflow-y: auto;
         font-size: 11px;
         line-height: 1.4;
+        min-height: 0;
       ">
         <div style="color: #666; text-align: center; padding: 20px;">
           Loading cyber data...
@@ -279,10 +287,11 @@ export class CyberInfoWindow {
         padding: 5px 10px;
         background: rgba(0, 128, 255, 0.1);
         border-top: 1px solid #0080ff;
-        font-size: 10px;
+        font-size: 13px;
         color: #0080ff;
         display: flex;
         justify-content: space-between;
+        flex-shrink: 0;
       ">
         <span id="status-text">Ready</span>
         <span id="last-update">--:--:--</span>
@@ -547,12 +556,45 @@ export class CyberInfoWindow {
     });
     
     // Listen for cycle started events
-    this.wsClient.on('cycle_started', (data: any) => {
+    this.wsClient.on('cycle_started', (message: any) => {
+      console.log('Received cycle_started event:', message);
+      const data = message.data || message;  // Handle both nested and flat structures
       if (data.cyber === this.selectedCyber) {
+        console.log(`Cycle started for ${data.cyber}: ${data.cycle_number}, Following: ${this.isFollowing}`);
         this.currentCycle = data.cycle_number;
         this.updateCycleStatus();
         if (this.isFollowing) {
-          this.goToCurrentCycle();
+          console.log(`Following mode active, jumping to cycle ${data.cycle_number}`);
+          this.selectedCycle = data.cycle_number;
+          this.fetchCycleData(this.selectedCycle, true);  // Force refresh to get latest data
+          
+          // Update the cycle input field
+          const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
+          if (cycleInput) {
+            cycleInput.value = this.selectedCycle.toString();
+          }
+        }
+      }
+    });
+    
+    // Listen for cycle completed events (more reliable than cycle_started)
+    this.wsClient.on('cycle_completed', (message: any) => {
+      console.log('Received cycle_completed event:', message);
+      const data = message.data || message;  // Handle both nested and flat structures
+      if (data.cyber === this.selectedCyber) {
+        console.log(`Cycle completed for ${data.cyber}: ${data.cycle_number}, Following: ${this.isFollowing}`);
+        this.currentCycle = data.cycle_number;
+        this.updateCycleStatus();
+        if (this.isFollowing) {
+          console.log(`Following mode active, showing completed cycle ${data.cycle_number}`);
+          this.selectedCycle = data.cycle_number;
+          this.fetchCycleData(this.selectedCycle, true);  // Force refresh to get complete data
+          
+          // Update the cycle input field
+          const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
+          if (cycleInput) {
+            cycleInput.value = this.selectedCycle.toString();
+          }
         }
       }
     });
@@ -631,7 +673,7 @@ export class CyberInfoWindow {
   
   private formatStageData(data: any): string {
     if (typeof data === 'string') {
-      return `<pre style="white-space: pre-wrap; word-wrap: break-word;">${this.escapeHtml(data)}</pre>`;
+      return `<pre style="white-space: pre-wrap; word-wrap: break-word; font-size: 14px; line-height: 1.4;">${this.escapeHtml(data)}</pre>`;
     }
     
     // Format different stage data types
@@ -642,18 +684,60 @@ export class CyberInfoWindow {
       html += `<h3 style="color: #00ff80; margin: 0 0 10px 0;">Stage: ${data.stage}</h3>`;
     }
     if (data.timestamp) {
-      html += `<div style="color: #888; font-size: 10px; margin-bottom: 10px;">Time: ${new Date(data.timestamp).toLocaleString()}</div>`;
+      html += `<div style="color: #888; font-size: 13px; margin-bottom: 10px;">Time: ${new Date(data.timestamp).toLocaleString()}</div>`;
+    }
+    
+    // Special handling for execution stage with scripts
+    if (data.script) {
+      html += '<h4 style="color: #00ffff; margin: 15px 0 10px 0;">Python Script:</h4>';
+      html += this.formatPythonScript(data.script);
+    }
+    
+    // Show execution results if available
+    if (data.results && Array.isArray(data.results)) {
+      html += '<h4 style="color: #00ffff; margin: 15px 0 10px 0;">Execution Results:</h4>';
+      for (const result of data.results) {
+        html += '<div style="border-left: 2px solid #00ff80; padding-left: 10px; margin: 10px 0;">';
+        if (result.status) {
+          const statusColor = result.status === 'completed' ? '#00ff80' : '#ff8080';
+          html += `<div style="color: ${statusColor};">Status: ${result.status}</div>`;
+        }
+        if (result.output) {
+          html += '<div style="margin-top: 5px;">Output:</div>';
+          html += `<pre style="color: #00ff80; margin-left: 10px; white-space: pre-wrap; word-wrap: break-word; font-size: 13px;">${this.escapeHtml(result.output)}</pre>`;
+        }
+        if (result.execution_time) {
+          html += `<div style="color: #888; font-size: 12px;">Time: ${result.execution_time}</div>`;
+        }
+        if (result.script_lines) {
+          html += `<div style="color: #888; font-size: 12px;">Script lines: ${result.script_lines}</div>`;
+        }
+        if (result.attempt) {
+          html += `<div style="color: #888; font-size: 12px;">Attempt: ${result.attempt}</div>`;
+        }
+        html += '</div>';
+      }
     }
     
     if (data.stage_output) {
       html += '<h4 style="color: #00ffff; margin: 0 0 10px 0;">Stage Output:</h4>';
-      html += this.formatValue(data.stage_output);
+      // Check if stage_output is a string that contains stringified JSON
+      let outputToFormat = data.stage_output;
+      if (typeof outputToFormat === 'string' && outputToFormat.includes('\\n')) {
+        // Replace escaped newlines with actual newlines
+        outputToFormat = outputToFormat.replace(/\\n/g, '\n');
+        // Replace escaped quotes
+        outputToFormat = outputToFormat.replace(/\\"/g, '"');
+        // Replace escaped backslashes
+        outputToFormat = outputToFormat.replace(/\\\\/g, '\\');
+      }
+      html += this.formatValue(outputToFormat);
     }
     
     if (data.working_memory && this.selectedStage === 'observation') {
       html += '<h4 style="color: #00ffff; margin: 15px 0 10px 0;">Working Memory Summary:</h4>';
       const mem = data.working_memory;
-      html += `<div style="color: #00ff80; margin-left: 10px;">`;
+      html += `<div style="color: #00ff80; margin-left: 10px; font-size: 14px; line-height: 1.4;">`;
       html += `<div>Max Tokens: ${mem.max_tokens || 'N/A'}</div>`;
       html += `<div>Current Task: ${mem.current_task_id || 'None'}</div>`;
       html += `<div>Memory Items: ${mem.memories ? mem.memories.length : 0}</div>`;
@@ -680,7 +764,7 @@ export class CyberInfoWindow {
     }
     
     if (data.duration_ms) {
-      html += `<div style="color: #888; margin-top: 10px; font-size: 10px;">Duration: ${data.duration_ms}ms</div>`;
+      html += `<div style="color: #888; margin-top: 10px; font-size: 13px;">Duration: ${data.duration_ms}ms</div>`;
     }
     
     html += '</div>';
@@ -689,14 +773,69 @@ export class CyberInfoWindow {
   
   private formatValue(value: any): string {
     if (typeof value === 'string') {
-      return `<div style="color: #00ff80; margin-left: 10px;">${this.escapeHtml(value)}</div>`;
+      // Try to parse as JSON if it looks like JSON
+      if ((value.startsWith('{') || value.startsWith('[')) && 
+          (value.endsWith('}') || value.endsWith(']'))) {
+        try {
+          const parsed = JSON.parse(value);
+          return `<pre style="color: #00ff80; margin-left: 10px; white-space: pre-wrap; word-wrap: break-word; font-size: 14px; line-height: 1.4;">${this.escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`;
+        } catch {
+          // Not valid JSON, treat as regular string
+        }
+      }
+      
+      // For multiline strings, use pre tag to preserve formatting
+      if (value.includes('\n')) {
+        return `<pre style="color: #00ff80; margin-left: 10px; white-space: pre-wrap; word-wrap: break-word; font-size: 14px; line-height: 1.4;">${this.escapeHtml(value)}</pre>`;
+      }
+      
+      // Single line string
+      return `<div style="color: #00ff80; margin-left: 10px; font-size: 14px; line-height: 1.4;">${this.escapeHtml(value)}</div>`;
     }
     
     if (typeof value === 'object' && value !== null) {
-      return `<pre style="color: #00ff80; margin-left: 10px; white-space: pre-wrap; word-wrap: break-word;">${this.escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+      return `<pre style="color: #00ff80; margin-left: 10px; white-space: pre-wrap; word-wrap: break-word; font-size: 14px; line-height: 1.4;">${this.escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
     }
     
-    return `<div style="color: #00ff80; margin-left: 10px;">${value}</div>`;
+    return `<div style="color: #00ff80; margin-left: 10px; font-size: 14px; line-height: 1.4;">${value}</div>`;
+  }
+  
+  private formatPythonScript(script: string): string {
+    // Replace escaped newlines with actual newlines for proper formatting
+    const formattedScript = script.replace(/\\n/g, '\n');
+    
+    // Create a syntax-highlighted version (basic Python highlighting)
+    const lines = formattedScript.split('\n');
+    const highlightedLines = lines.map((line, index) => {
+      // Add line numbers
+      const lineNum = (index + 1).toString().padStart(3, ' ');
+      
+      // Basic syntax highlighting
+      let highlightedLine = this.escapeHtml(line);
+      
+      // Highlight Python keywords
+      const keywords = ['import', 'from', 'def', 'class', 'if', 'else', 'elif', 'for', 'while', 
+                       'return', 'try', 'except', 'finally', 'with', 'as', 'in', 'is', 'not',
+                       'and', 'or', 'True', 'False', 'None', 'print', 'isinstance'];
+      keywords.forEach(keyword => {
+        const regex = new RegExp(`\\b${keyword}\\b`, 'g');
+        highlightedLine = highlightedLine.replace(regex, `<span style="color: #ff80ff;">${keyword}</span>`);
+      });
+      
+      // Highlight strings (simple version)
+      highlightedLine = highlightedLine.replace(/(["'])([^"']*)\1/g, '<span style="color: #80ff80;">$1$2$1</span>');
+      
+      // Highlight comments
+      if (line.trim().startsWith('#')) {
+        highlightedLine = `<span style="color: #808080;">${highlightedLine}</span>`;
+      } else {
+        highlightedLine = highlightedLine.replace(/(#.*)$/, '<span style="color: #808080;">$1</span>');
+      }
+      
+      return `<span style="color: #666;">${lineNum}│</span> ${highlightedLine}`;
+    });
+    
+    return `<pre style="background: rgba(0, 0, 0, 0.3); padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 13px; line-height: 1.5; font-family: 'Courier New', monospace;">${highlightedLines.join('\n')}</pre>`;
   }
   
   private escapeHtml(text: string): string {
@@ -795,12 +934,27 @@ export class CyberInfoWindow {
       btnFollow.style.color = '#00ff00';
       btnFollow.textContent = '👁 Following';
       this.updateStatus('Following cyber updates');
+      
+      // Also enable camera follow if we have a camera controller and selected cyber
+      if (this.cameraController && this.selectedCyber) {
+        const agent = this.agentManager.getAgentData(this.selectedCyber);
+        if (agent) {
+          this.cameraController.setMode(CameraMode.FOLLOW);
+          this.cameraController.setTarget(agent.mesh);
+        }
+      }
     } else {
       btnFollow.style.background = 'rgba(0, 128, 255, 0.2)';
       btnFollow.style.borderColor = '#0080ff';
       btnFollow.style.color = '#00ffff';
       btnFollow.textContent = '👁 Follow';
       this.updateStatus('Follow mode disabled');
+      
+      // Disable camera follow
+      if (this.cameraController) {
+        this.cameraController.setMode(CameraMode.ORBIT);
+        this.cameraController.setTarget(null);
+      }
     }
   }
   
@@ -879,7 +1033,7 @@ export class CyberInfoWindow {
   }
   
   public show() {
-    this.container.style.display = 'block';
+    this.container.style.display = 'flex';
   }
   
   public hide() {
@@ -889,5 +1043,9 @@ export class CyberInfoWindow {
   
   public isVisible(): boolean {
     return this.container.style.display !== 'none';
+  }
+  
+  public setCameraController(cameraController: CameraController) {
+    this.cameraController = cameraController;
   }
 }

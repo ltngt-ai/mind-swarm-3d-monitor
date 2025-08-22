@@ -449,8 +449,8 @@ async function initialize() {
   // Create server selector UI
   document.body.appendChild(createServerSelector());
   
-  // Initialize CyberInfoWindow
-  cyberInfoWindow = new CyberInfoWindow(wsClient, agentManager);
+  // Initialize CyberInfoWindow with camera controller
+  cyberInfoWindow = new CyberInfoWindow(wsClient, agentManager, cameraController);
   
   // Initialize mode manager with default mode
   await modeManager.initialize(AppMode.USER);
