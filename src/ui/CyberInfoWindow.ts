@@ -688,15 +688,19 @@ export class CyberInfoWindow {
     }
     
     // Special handling for execution stage with scripts
-    if (data.script) {
+    // Check both direct script field and stage_output.script
+    const script = data.script || (data.stage_output && data.stage_output.script);
+    if (script) {
       html += '<h4 style="color: #00ffff; margin: 15px 0 10px 0;">Python Script:</h4>';
-      html += this.formatPythonScript(data.script);
+      html += this.formatPythonScript(script);
     }
     
     // Show execution results if available
-    if (data.results && Array.isArray(data.results)) {
+    // Check both direct results field and stage_output.results
+    const results = data.results || (data.stage_output && data.stage_output.results);
+    if (results && Array.isArray(results)) {
       html += '<h4 style="color: #00ffff; margin: 15px 0 10px 0;">Execution Results:</h4>';
-      for (const result of data.results) {
+      for (const result of results) {
         html += '<div style="border-left: 2px solid #00ff80; padding-left: 10px; margin: 10px 0;">';
         if (result.status) {
           const statusColor = result.status === 'completed' ? '#00ff80' : '#ff8080';
