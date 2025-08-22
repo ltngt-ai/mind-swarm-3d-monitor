@@ -22,7 +22,7 @@ export class CyberInfoWindow {
   private wsClient: WebSocketClient;
   
   private selectedCyber: string | null = null;
-  private currentCycle: number = 1;  // Start at 1 since cycle 0 usually doesn't exist
+  private currentCycle: number = 999;  // Start high so we don't clamp incorrectly before data loads
   private selectedCycle: number = 1;  // Start at 1
   private selectedStage: string = 'observation';
   private cycleData: Map<number, CycleData> = new Map();
@@ -171,6 +171,7 @@ export class CyberInfoWindow {
             border-radius: 4px;
             text-align: center;
           ">
+          <span id="cycle-range" style="color: #888; margin-left: 5px;">/ -</span>
           <span id="cycle-status" style="color: #00ff00; margin-left: 10px;">●</span>
         </div>
         <button id="btn-next-cycle" style="
@@ -332,7 +333,8 @@ export class CyberInfoWindow {
       // Clamp to valid range
       if (newCycle < 1) {
         newCycle = 1;
-      } else if (newCycle > this.currentCycle) {
+      } else if (this.currentCycle < 999 && newCycle > this.currentCycle) {
+        // Only clamp upper bound if we know the actual current cycle
         newCycle = this.currentCycle;
       }
       
@@ -584,13 +586,15 @@ export class CyberInfoWindow {
     // Clamp to valid range (1 to currentCycle)
     if (this.selectedCycle < 1) {
       this.selectedCycle = 1;
-    } else if (this.selectedCycle > this.currentCycle) {
+    } else if (this.currentCycle < 999 && this.selectedCycle > this.currentCycle) {
+      // Only clamp upper bound if we know the actual current cycle
       this.selectedCycle = this.currentCycle;
     }
     
     const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
     cycleInput.value = this.selectedCycle.toString();
     
+    this.updateCycleStatus();
     this.fetchCycleData(this.selectedCycle);
   }
   
@@ -686,6 +690,20 @@ export class CyberInfoWindow {
   
   private updateCycleStatus() {
     const statusEl = this.container.querySelector('#cycle-status') as HTMLElement;
+    const rangeEl = this.container.querySelector('#cycle-range') as HTMLElement;
+    
+    // Update range display
+    if (rangeEl) {
+      if (this.currentCycle < 999) {
+        rangeEl.textContent = `/ ${this.currentCycle}`;
+        rangeEl.style.color = '#00ffff';
+      } else {
+        rangeEl.textContent = '/ -';
+        rangeEl.style.color = '#888';
+      }
+    }
+    
+    // Update status indicator
     if (this.selectedCycle === this.currentCycle) {
       statusEl.style.color = '#00ff00';
       statusEl.textContent = '● LIVE';
