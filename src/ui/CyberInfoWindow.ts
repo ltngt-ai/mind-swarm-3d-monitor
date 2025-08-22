@@ -58,7 +58,7 @@ export class CyberInfoWindow {
       height: 650px;
       background: rgba(0, 20, 40, 0.98);
       border: 1px solid #0080ff;
-      border-radius: 0;
+      border-radius: 12px;
       font-family: 'Courier New', monospace;
       font-size: 16px;
       color: #00ffff;

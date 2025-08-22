@@ -123,7 +123,7 @@ wsClient.on('agent_created', (data: AgentCreatedEvent) => {
     premium: (data.config as any)?.use_premium || false,
     current_location: (data as any).current_location
   });
-  updateAgentCount();
+  // Status updates handled by CyberInfoWindow now
   
   // Fetch initial reflection for this cyber
   wsClient.requestCurrentReflection(data.name, `init_${data.name}_${Date.now()}`);
@@ -137,7 +137,7 @@ wsClient.on('agent_created', (data: AgentCreatedEvent) => {
 
 wsClient.on('agent_terminated', (data: any) => {
   agentManager.removeAgent(data.name);
-  updateAgentCount();
+  // Status updates handled by CyberInfoWindow now
   
   eventBus.emit(Events.CYBER_ACTIVITY, { 
     cyber: data.name, 
@@ -268,13 +268,13 @@ wsClient.on('current_reflection', (data: any) => {
 });
 
 wsClient.on('connected', () => {
-  updateConnectionStatus('connected');
+  // Connection status handled by server selector now
   // Fetch initial status
   fetchInitialStatus();
 });
 
 wsClient.on('disconnected', () => {
-  updateConnectionStatus('disconnected');
+  // Connection status handled by server selector now
 });
 
 // Fetch status update to check for changes
@@ -334,7 +334,7 @@ async function fetchInitialStatus() {
           // Fetch initial reflection for each cyber
           wsClient.requestCurrentReflection(name, `init_${name}_${Date.now()}`);
         });
-        updateAgentCount();
+        // Status updates handled by CyberInfoWindow now
       } else {
         console.log('No cybers in status response');
       }
@@ -355,57 +355,7 @@ wsClient.connect();
 // Create info window instance
 let cyberInfoWindow: CyberInfoWindow;
 
-// UI Status Elements
-function createStatusUI() {
-  // Connection status
-  const statusContainer = document.createElement('div');
-  statusContainer.style.cssText = `
-    position: fixed;
-    top: 10px;
-    right: 10px;
-    background: rgba(0, 20, 40, 0.8);
-    border: 1px solid #0080ff;
-    border-radius: 5px;
-    padding: 8px 12px;
-    color: #00ffff;
-    font-family: 'Courier New', monospace;
-    font-size: 12px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    z-index: 100;
-  `;
-  
-  statusContainer.innerHTML = `
-    <div class="status-indicator" style="
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #666;
-    "></div>
-    <span id="connection-status">disconnected</span>
-    <span>|</span>
-    <span>Cybers: <span id="agent-count">0</span></span>
-  `;
-  
-  document.body.appendChild(statusContainer);
-}
-
-// UI updates
-function updateConnectionStatus(status: string) {
-  const statusEl = document.getElementById('connection-status');
-  const indicatorEl = document.querySelector('.status-indicator');
-  if (statusEl) statusEl.textContent = status;
-  if (indicatorEl) {
-    indicatorEl.className = `status-indicator`;
-    (indicatorEl as HTMLElement).style.background = status === 'connected' ? '#00ff00' : '#ff0000';
-  }
-}
-
-function updateAgentCount() {
-  const countEl = document.getElementById('agent-count');
-  if (countEl) countEl.textContent = agentManager.getAgentCount().toString();
-}
+// Old UI status elements removed - using CyberInfoWindow instead
 
 // Handle window resize
 function onWindowResize() {
@@ -443,9 +393,6 @@ function animate() {
 
 // Initialize everything
 async function initialize() {
-  // Create status UI
-  createStatusUI();
-  
   // Create server selector UI
   document.body.appendChild(createServerSelector());
   

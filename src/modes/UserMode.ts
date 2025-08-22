@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { Mode, ModeContext } from './Mode';
 import { CameraMode } from '../camera/CameraController';
-import { Mailbox } from '../Mailbox';
+// import { Mailbox } from '../Mailbox'; // Disabled - using CyberInfoWindow instead
 import { eventBus, Events } from '../utils/EventBus';
 import { config } from '../config';
 
 export class UserMode extends Mode {
   // private cameraController?: CameraController;
-  private mailbox?: Mailbox;
+  // private mailbox?: Mailbox; // Disabled - using CyberInfoWindow instead
   private selectedCyber: string | null = null;
   private followingCyber: boolean = false;
   
@@ -54,9 +54,10 @@ export class UserMode extends Mode {
         sendMessage: () => this.openMessageDialog() 
       }, 'sendMessage').name('Send Message');
       
-      this.guiFolder.add({
-        openMailbox: () => this.toggleMailbox()
-      }, 'openMailbox').name('📧 Open Mailbox');
+      // Mailbox disabled - using new CyberInfoWindow instead
+      // this.guiFolder.add({
+      //   openMailbox: () => this.toggleMailbox()
+      // }, 'openMailbox').name('📧 Open Mailbox');
     }
   }
 
@@ -83,10 +84,10 @@ export class UserMode extends Mode {
   }
 
   protected async onActivate(): Promise<void> {
-    // Initialize mailbox if not already done
-    if (!this.mailbox) {
-      this.mailbox = new Mailbox();
-    }
+    // Mailbox disabled - using CyberInfoWindow instead
+    // if (!this.mailbox) {
+    //   this.mailbox = new Mailbox();
+    // }
     
     // Show user UI
     if (this.cyberInfo) this.cyberInfo.style.display = 'block';
@@ -99,8 +100,8 @@ export class UserMode extends Mode {
     
     this.showNotification('User mode activated - Click on Cybers to select them', 'info');
     
-    // Start refreshing mailbox
-    this.startMailboxRefresh();
+    // Mailbox refresh disabled
+    // this.startMailboxRefresh();
   }
 
   protected async onDeactivate(): Promise<void> {
@@ -133,9 +134,9 @@ export class UserMode extends Mode {
       case 'f': // Toggle follow mode
         this.setFollowMode(!this.followingCyber);
         return true;
-      case 'm': // Open mailbox
-        this.toggleMailbox();
-        return true;
+      // case 'm': // Open mailbox - disabled
+      //   this.toggleMailbox();
+      //   return true;
       case 'escape': // Deselect
         this.deselectCyber();
         return true;
@@ -283,11 +284,7 @@ export class UserMode extends Mode {
     this.updateCyberInfo();
   }
 
-  private toggleMailbox(): void {
-    if (this.mailbox) {
-      this.mailbox.toggle();
-    }
-  }
+  // Mailbox methods removed - using CyberInfoWindow instead
 
   private openMessageDialog(): void {
     if (!this.selectedCyber) {
@@ -374,7 +371,6 @@ export class UserMode extends Mode {
       <div><b>WASD</b> - Move camera</div>
       <div><b>Click</b> - Select Cyber</div>
       <div><b>F</b> - Follow selected</div>
-      <div><b>M</b> - Open mailbox</div>
       <div><b>Enter</b> - Message selected</div>
       <div><b>Tab</b> - Cycle selection</div>
       <div><b>ESC</b> - Deselect</div>
@@ -436,15 +432,5 @@ export class UserMode extends Mode {
     return colors[state] || '#999999';
   }
 
-  private startMailboxRefresh(): void {
-    // Refresh mailbox periodically
-    if (this.mailbox) {
-      this.mailbox.refreshMessages();
-      setInterval(() => {
-        if (this.isActive && this.mailbox) {
-          this.mailbox.refreshMessages();
-        }
-      }, 10000);
-    }
-  }
+  // Mailbox refresh removed - using CyberInfoWindow instead
 }
