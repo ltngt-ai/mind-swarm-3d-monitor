@@ -344,10 +344,8 @@ export class CyberInfoWindow {
   
   private setupEventListeners() {
     // Listen for cycle data responses
-    this.wsClient.on('cycle_data', (message: any) => {
-      console.log('Received cycle_data:', message);
-      // The message contains a 'data' field with the actual cycle data
-      const data = message.data || message;
+    this.wsClient.on('cycle_data', (data: any) => {
+      console.log('Received cycle_data:', data);
       if (data.cyber === this.selectedCyber && data.cycle_number !== undefined) {
         this.cycleData.set(data.cycle_number, data.data);
         if (data.cycle_number === this.selectedCycle) {
@@ -357,9 +355,8 @@ export class CyberInfoWindow {
     });
     
     // Listen for cycles list response
-    this.wsClient.on('cycles_list', (message: any) => {
-      console.log('Received cycles_list:', message);
-      const data = message.data || message;
+    this.wsClient.on('cycles_list', (data: any) => {
+      console.log('Received cycles_list:', data);
       if (data.cyber === this.selectedCyber && data.cycles) {
         // Get the latest cycle number from the list
         if (data.cycles.length > 0) {
@@ -379,9 +376,8 @@ export class CyberInfoWindow {
     });
     
     // Listen for current reflection response (contains cycle info)
-    this.wsClient.on('current_reflection', (message: any) => {
-      console.log('Received current_reflection:', message);
-      const data = message.data || message;
+    this.wsClient.on('current_reflection', (data: any) => {
+      console.log('Received current_reflection:', data);
       if (data.cyber === this.selectedCyber && data.cycle_number) {
         this.currentCycle = data.cycle_number;
         this.selectedCycle = data.cycle_number;

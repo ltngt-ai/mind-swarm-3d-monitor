@@ -32,7 +32,10 @@ export class WebSocketClient {
           
           // Emit specific event type
           if (message.type) {
-            this.emit(message.type, message.data || message);
+            // For messages with nested data field, pass just the data
+            // For messages without nested data, pass the whole message
+            const eventData = message.data !== undefined ? message.data : message;
+            this.emit(message.type, eventData);
           }
         } catch (error) {
           console.error('Failed to parse WebSocket message:', error);
