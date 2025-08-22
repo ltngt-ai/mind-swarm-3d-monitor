@@ -801,35 +801,50 @@ export class CyberInfoWindow {
   }
   
   private formatPythonScript(script: string): string {
-    // Replace escaped newlines with actual newlines for proper formatting
-    const formattedScript = script.replace(/\\n/g, '\n');
+    // First, handle the escaped newlines by replacing them with actual newlines
+    // The script comes with literal \n characters, not actual newlines
+    const unescapedScript = script.replace(/\\n/g, '\n')
+                                  .replace(/\\"/g, '"')
+                                  .replace(/\\'/g, "'")
+                                  .replace(/\\\\/g, '\\');
     
     // Create a syntax-highlighted version (basic Python highlighting)
-    const lines = formattedScript.split('\n');
+    const lines = unescapedScript.split('\n');
     const highlightedLines = lines.map((line, index) => {
       // Add line numbers
       const lineNum = (index + 1).toString().padStart(3, ' ');
       
-      // Basic syntax highlighting
+      // Basic syntax highlighting - escape HTML first
       let highlightedLine = this.escapeHtml(line);
       
       // Highlight Python keywords
       const keywords = ['import', 'from', 'def', 'class', 'if', 'else', 'elif', 'for', 'while', 
                        'return', 'try', 'except', 'finally', 'with', 'as', 'in', 'is', 'not',
-                       'and', 'or', 'True', 'False', 'None', 'print', 'isinstance'];
+                       'and', 'or', 'True', 'False', 'None', 'print', 'isinstance', 'json'];
       keywords.forEach(keyword => {
         const regex = new RegExp(`\\b${keyword}\\b`, 'g');
         highlightedLine = highlightedLine.replace(regex, `<span style="color: #ff80ff;">${keyword}</span>`);
       });
       
-      // Highlight strings (simple version)
-      highlightedLine = highlightedLine.replace(/(["'])([^"']*)\1/g, '<span style="color: #80ff80;">$1$2$1</span>');
+      // Highlight common Mind-Swarm objects
+      const mindSwarmObjects = ['memory', 'tasks', 'knowledge', 'cbr', 'environment'];
+      mindSwarmObjects.forEach(obj => {
+        const regex = new RegExp(`\\b${obj}\\b`, 'g');
+        highlightedLine = highlightedLine.replace(regex, `<span style="color: #80ffff;">${obj}</span>`);
+      });
+      
+      // Highlight strings (improved version to handle multi-line strings)
+      highlightedLine = highlightedLine.replace(/(""".*?"""|'''.*?'''|"[^"]*"|'[^']*')/g, 
+        '<span style="color: #80ff80;">$1</span>');
       
       // Highlight comments
       if (line.trim().startsWith('#')) {
         highlightedLine = `<span style="color: #808080;">${highlightedLine}</span>`;
       } else {
-        highlightedLine = highlightedLine.replace(/(#.*)$/, '<span style="color: #808080;">$1</span>');
+        const commentMatch = highlightedLine.match(/^(.*?)(#.*)$/);
+        if (commentMatch) {
+          highlightedLine = commentMatch[1] + `<span style="color: #808080;">${this.escapeHtml(commentMatch[2])}</span>`;
+        }
       }
       
       return `<span style="color: #666;">${lineNum}│</span> ${highlightedLine}`;
