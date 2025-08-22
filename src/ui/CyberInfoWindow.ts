@@ -22,8 +22,8 @@ export class CyberInfoWindow {
   private wsClient: WebSocketClient;
   
   private selectedCyber: string | null = null;
-  private currentCycle: number = 999;  // Start high so we don't clamp incorrectly before data loads
-  private selectedCycle: number = 1;  // Start at 1
+  private currentCycle: number = 0;  // Will be set when we get actual data
+  private selectedCycle: number = 999;  // Start high to indicate not yet set
   private selectedStage: string = 'observation';
   private cycleData: Map<number, CycleData> = new Map();
   
@@ -162,7 +162,7 @@ export class CyberInfoWindow {
         ">◀</button>
         <div style="flex: 1; text-align: center;">
           <span>Cycle </span>
-          <input type="number" id="cycle-number" value="1" style="
+          <input type="number" id="cycle-number" value="" placeholder="-" style="
             background: rgba(0, 255, 255, 0.1);
             border: 1px solid #00ffff;
             color: #00ffff;
@@ -171,7 +171,7 @@ export class CyberInfoWindow {
             border-radius: 4px;
             text-align: center;
           ">
-          <span id="cycle-range" style="color: #888; margin-left: 5px;">/ -</span>
+          <span id="cycle-range" style="color: #888; margin-left: 5px;"></span>
           <span id="cycle-status" style="color: #00ff00; margin-left: 10px;">●</span>
         </div>
         <button id="btn-next-cycle" style="
@@ -333,7 +333,7 @@ export class CyberInfoWindow {
       // Clamp to valid range
       if (newCycle < 1) {
         newCycle = 1;
-      } else if (this.currentCycle < 999 && newCycle > this.currentCycle) {
+      } else if (this.currentCycle > 0 && newCycle > this.currentCycle) {
         // Only clamp upper bound if we know the actual current cycle
         newCycle = this.currentCycle;
       }
@@ -355,6 +355,27 @@ export class CyberInfoWindow {
   }
   
   private setupEventListeners() {
+    // Listen for fast current cycle response
+    this.wsClient.on('current_cycle', (data: any) => {
+      console.log('Received current_cycle (fast):', data);
+      if (data.cyber === this.selectedCyber && data.cycle_number) {
+        this.currentCycle = data.cycle_number;
+        this.selectedCycle = data.cycle_number;
+        
+        // Update the input field
+        const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
+        if (cycleInput) {
+          cycleInput.value = this.selectedCycle.toString();
+        }
+        
+        this.updateCycleStatus();
+        this.updateStatus('');
+        
+        // Now fetch the actual cycle data
+        this.fetchCycleData(this.selectedCycle);
+      }
+    });
+    
     // Listen for cycle data responses
     this.wsClient.on('cycle_data', (data: any) => {
       console.log('Received cycle_data:', data);
@@ -369,28 +390,31 @@ export class CyberInfoWindow {
     // Listen for cycles list response
     this.wsClient.on('cycles_list', (data: any) => {
       console.log('Received cycles_list:', data);
-      if (data.cyber === this.selectedCyber && data.cycles) {
-        // Get the latest valid cycle number from the list (filter out cycle 0)
-        if (data.cycles.length > 0) {
+      if (data.cyber === this.selectedCyber) {
+        // If we have cycles data from index.json, use it
+        if (data.cycles && data.cycles.length > 0) {
           const validCycles = data.cycles
             .map((c: any) => typeof c === 'number' ? c : c.cycle_number || 0)
             .filter((n: number) => n > 0);  // Skip cycle 0 as it's usually incomplete
           
+          console.log('Valid cycles found:', validCycles);
+          
           if (validCycles.length > 0) {
             this.currentCycle = Math.max(...validCycles);
             this.selectedCycle = this.currentCycle;
-          } else {
-            // Fallback to 1 if no valid cycles
-            this.currentCycle = 1;
-            this.selectedCycle = 1;
+            console.log(`Set currentCycle to ${this.currentCycle}, selectedCycle to ${this.selectedCycle}`);
           }
-          
-          const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
-          if (cycleInput) {
-            cycleInput.value = this.selectedCycle.toString();
-          }
-          this.updateCycleStatus();
-          // Fetch the current cycle data
+        }
+        // If no cycles from index.json, we'll rely on current_reflection to give us the current cycle
+        // Don't default to 1 here - wait for actual data
+        
+        const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
+        if (cycleInput && this.selectedCycle > 0 && this.selectedCycle < 999) {
+          cycleInput.value = this.selectedCycle.toString();
+        }
+        this.updateCycleStatus();
+        // Fetch the current cycle data if we have a valid cycle
+        if (this.selectedCycle > 0 && this.selectedCycle < 999) {
           this.fetchCycleData(this.selectedCycle);
         }
       }
@@ -400,19 +424,36 @@ export class CyberInfoWindow {
     this.wsClient.on('current_reflection', (data: any) => {
       console.log('Received current_reflection:', data);
       if (data.cyber === this.selectedCyber) {
-        // Skip cycle 0 if that's what we get
-        const cycleNum = data.cycle_number || 1;
-        const validCycle = cycleNum > 0 ? cycleNum : 1;
-        
-        this.currentCycle = validCycle;
-        this.selectedCycle = validCycle;
-        const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
-        if (cycleInput) {
-          cycleInput.value = this.selectedCycle.toString();
+        // Get the actual cycle number from the response
+        const cycleNum = data.cycle_number;
+        if (cycleNum && cycleNum > 0) {
+          // This is the current/latest cycle
+          this.currentCycle = cycleNum;
+          
+          // Always set selectedCycle on initial load (when it's 999)
+          if (this.selectedCycle >= 999) {
+            this.selectedCycle = cycleNum;
+            console.log(`Setting selectedCycle to ${this.selectedCycle} from current_reflection`);
+          } else if (this.selectedCycle <= 0) {
+            // Also handle the case where it might be 0 or negative
+            this.selectedCycle = cycleNum;
+            console.log(`Setting selectedCycle to ${this.selectedCycle} from current_reflection (was <= 0)`);
+          }
+          
+          // Update the input field
+          const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
+          if (cycleInput && this.selectedCycle > 0) {
+            cycleInput.value = this.selectedCycle.toString();
+            console.log(`Updated cycle input to ${this.selectedCycle}`);
+          }
+          
+          this.updateCycleStatus();
+          
+          // Fetch the full cycle data if we just set the selected cycle
+          if (this.selectedCycle === cycleNum) {
+            this.fetchCycleData(this.selectedCycle);
+          }
         }
-        this.updateCycleStatus();
-        // Fetch the full cycle data
-        this.fetchCycleData(this.selectedCycle);
       }
     });
     
@@ -437,19 +478,14 @@ export class CyberInfoWindow {
     const nameEl = this.container.querySelector('#cyber-name') as HTMLElement;
     nameEl.textContent = `Cyber: ${cyberName}`;
     
-    // Request cycles list to get the latest valid cycle
-    this.wsClient.send({
-      type: 'get_cycles',
-      cyber: cyberName,
-      limit: 100,  // Get more cycles to find valid ones
-      request_id: `cycles_select_${Date.now()}`
-    });
+    // Update status to show loading
+    this.updateStatus('Loading...');
     
-    // Also request current reflection which will give us the actual current cycle
+    // Use the fast endpoint to get just the current cycle number
     this.wsClient.send({
-      type: 'get_current_reflection',
+      type: 'get_current_cycle',
       cyber: cyberName,
-      request_id: `reflection_select_${Date.now()}`
+      request_id: `current_cycle_${Date.now()}`
     });
   }
   
@@ -586,13 +622,15 @@ export class CyberInfoWindow {
     // Clamp to valid range (1 to currentCycle)
     if (this.selectedCycle < 1) {
       this.selectedCycle = 1;
-    } else if (this.currentCycle < 999 && this.selectedCycle > this.currentCycle) {
+    } else if (this.currentCycle > 0 && this.selectedCycle > this.currentCycle) {
       // Only clamp upper bound if we know the actual current cycle
       this.selectedCycle = this.currentCycle;
     }
     
     const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
-    cycleInput.value = this.selectedCycle.toString();
+    if (cycleInput && this.selectedCycle > 0 && this.selectedCycle < 999) {
+      cycleInput.value = this.selectedCycle.toString();
+    }
     
     this.updateCycleStatus();
     this.fetchCycleData(this.selectedCycle);
@@ -619,6 +657,12 @@ export class CyberInfoWindow {
   
   private fetchCycleData(cycleNumber: number) {
     if (!this.selectedCyber) return;
+    
+    // Don't fetch invalid cycle numbers
+    if (cycleNumber <= 0 || cycleNumber >= 999) {
+      console.warn(`Skipping fetch for invalid cycle number: ${cycleNumber}`);
+      return;
+    }
     
     // Check cache first
     if (this.cycleData.has(cycleNumber)) {
@@ -682,7 +726,7 @@ export class CyberInfoWindow {
   }
   
   private refreshData() {
-    if (this.selectedCyber) {
+    if (this.selectedCyber && this.selectedCycle > 0 && this.selectedCycle < 999) {
       this.fetchCycleData(this.selectedCycle);
       this.updateStatus('Refreshing data...');
     }
@@ -694,7 +738,7 @@ export class CyberInfoWindow {
     
     // Update range display
     if (rangeEl) {
-      if (this.currentCycle < 999) {
+      if (this.currentCycle > 0) {
         rangeEl.textContent = `/ ${this.currentCycle}`;
         rangeEl.style.color = '#00ffff';
       } else {
