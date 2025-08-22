@@ -81,11 +81,13 @@ export class WebSocketClient {
   }
 
   requestCurrentReflection(cyberName: string, requestId?: string) {
-    this.send({
+    const message = {
       type: 'get_current_reflection',
       cyber: cyberName,
       request_id: requestId || `ref_${Date.now()}`
-    });
+    };
+    console.log('Requesting reflection:', message);
+    this.send(message);
   }
 
   on(event: string, handler: EventHandler) {
