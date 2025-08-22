@@ -344,12 +344,54 @@ export class CyberInfoWindow {
   
   private setupEventListeners() {
     // Listen for cycle data responses
-    this.wsClient.on('cycle_data', (data: any) => {
+    this.wsClient.on('cycle_data', (message: any) => {
+      console.log('Received cycle_data:', message);
+      // The message contains a 'data' field with the actual cycle data
+      const data = message.data || message;
       if (data.cyber === this.selectedCyber && data.cycle_number !== undefined) {
         this.cycleData.set(data.cycle_number, data.data);
         if (data.cycle_number === this.selectedCycle) {
           this.displayStageData();
         }
+      }
+    });
+    
+    // Listen for cycles list response
+    this.wsClient.on('cycles_list', (message: any) => {
+      console.log('Received cycles_list:', message);
+      const data = message.data || message;
+      if (data.cyber === this.selectedCyber && data.cycles) {
+        // Get the latest cycle number from the list
+        if (data.cycles.length > 0) {
+          this.currentCycle = Math.max(...data.cycles.map((c: any) => 
+            typeof c === 'number' ? c : c.cycle_number || 0
+          ));
+          this.selectedCycle = this.currentCycle;
+          const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
+          if (cycleInput) {
+            cycleInput.value = this.selectedCycle.toString();
+          }
+          this.updateCycleStatus();
+          // Fetch the current cycle data
+          this.fetchCycleData(this.currentCycle);
+        }
+      }
+    });
+    
+    // Listen for current reflection response (contains cycle info)
+    this.wsClient.on('current_reflection', (message: any) => {
+      console.log('Received current_reflection:', message);
+      const data = message.data || message;
+      if (data.cyber === this.selectedCyber && data.cycle_number) {
+        this.currentCycle = data.cycle_number;
+        this.selectedCycle = data.cycle_number;
+        const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
+        if (cycleInput) {
+          cycleInput.value = this.selectedCycle.toString();
+        }
+        this.updateCycleStatus();
+        // Fetch the full cycle data
+        this.fetchCycleData(this.currentCycle);
       }
     });
     
@@ -410,6 +452,8 @@ export class CyberInfoWindow {
     const contentEl = this.container.querySelector('#info-content') as HTMLElement;
     const cycleData = this.cycleData.get(this.selectedCycle);
     
+    console.log(`Displaying stage ${this.selectedStage} for cycle ${this.selectedCycle}`, cycleData);
+    
     if (!cycleData) {
       contentEl.innerHTML = `
         <div style="color: #666; text-align: center; padding: 20px;">
@@ -442,29 +486,50 @@ export class CyberInfoWindow {
     // Format different stage data types
     let html = '<div>';
     
+    // Add stage name and timestamp if available
+    if (data.stage) {
+      html += `<h3 style="color: #00ff80; margin: 0 0 10px 0;">Stage: ${data.stage}</h3>`;
+    }
+    if (data.timestamp) {
+      html += `<div style="color: #888; font-size: 10px; margin-bottom: 10px;">Time: ${new Date(data.timestamp).toLocaleString()}</div>`;
+    }
+    
     if (data.stage_output) {
       html += '<h4 style="color: #00ffff; margin: 0 0 10px 0;">Stage Output:</h4>';
       html += this.formatValue(data.stage_output);
     }
     
-    if (data.working_memory) {
-      html += '<h4 style="color: #00ffff; margin: 15px 0 10px 0;">Working Memory:</h4>';
-      html += this.formatValue(data.working_memory);
+    if (data.working_memory && this.selectedStage === 'observation') {
+      html += '<h4 style="color: #00ffff; margin: 15px 0 10px 0;">Working Memory Summary:</h4>';
+      const mem = data.working_memory;
+      html += `<div style="color: #00ff80; margin-left: 10px;">`;
+      html += `<div>Max Tokens: ${mem.max_tokens || 'N/A'}</div>`;
+      html += `<div>Current Task: ${mem.current_task_id || 'None'}</div>`;
+      html += `<div>Memory Items: ${mem.memories ? mem.memories.length : 0}</div>`;
+      html += `</div>`;
     }
     
     if (data.llm_input) {
       html += '<h4 style="color: #00ffff; margin: 15px 0 10px 0;">LLM Input:</h4>';
+      html += '<details><summary style="cursor: pointer; color: #0080ff;">Click to expand</summary>';
       html += this.formatValue(data.llm_input);
+      html += '</details>';
     }
     
     if (data.llm_output) {
       html += '<h4 style="color: #00ffff; margin: 15px 0 10px 0;">LLM Output:</h4>';
+      html += '<details><summary style="cursor: pointer; color: #0080ff;">Click to expand</summary>';
       html += this.formatValue(data.llm_output);
+      html += '</details>';
     }
     
-    if (data.token_usage) {
+    if (data.token_usage && Object.keys(data.token_usage).length > 0) {
       html += '<h4 style="color: #00ffff; margin: 15px 0 10px 0;">Token Usage:</h4>';
       html += this.formatValue(data.token_usage);
+    }
+    
+    if (data.duration_ms) {
+      html += `<div style="color: #888; margin-top: 10px; font-size: 10px;">Duration: ${data.duration_ms}ms</div>`;
     }
     
     html += '</div>';
@@ -515,16 +580,20 @@ export class CyberInfoWindow {
     
     // Check cache first
     if (this.cycleData.has(cycleNumber)) {
+      console.log(`Using cached data for cycle ${cycleNumber}`);
       this.displayStageData();
       return;
     }
     
     // Request from server
-    this.wsClient.send({
+    const request = {
       type: 'get_cycle_data',
       cyber: this.selectedCyber,
-      cycle_number: cycleNumber
-    });
+      cycle_number: cycleNumber,
+      request_id: `cycle_${cycleNumber}_${Date.now()}`
+    };
+    console.log('Requesting cycle data:', request);
+    this.wsClient.send(request);
     
     this.updateStatus(`Loading cycle ${cycleNumber}...`);
   }
