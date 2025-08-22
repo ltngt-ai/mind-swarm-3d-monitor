@@ -818,10 +818,18 @@ export class CyberInfoWindow {
       // Add line numbers
       const lineNum = (index + 1).toString().padStart(3, ' ');
       
-      // Basic syntax highlighting - escape HTML first
-      let highlightedLine = this.escapeHtml(line);
+      // First escape HTML characters to prevent XSS
+      let highlightedLine = line
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
       
-      // Highlight Python keywords
+      // Highlight strings FIRST (before keywords) to avoid highlighting keywords inside strings
+      // Handle triple quotes, double quotes, and single quotes
+      highlightedLine = highlightedLine.replace(/("""[^"]*"""|'''[^']*'''|"[^"]*"|'[^']*')/g, 
+        '<span style="color: #80ff80;">$1</span>');
+      
+      // Highlight Python keywords (simple approach without lookbehind for browser compatibility)
       const keywords = ['import', 'from', 'def', 'class', 'if', 'else', 'elif', 'for', 'while', 
                        'return', 'try', 'except', 'finally', 'with', 'as', 'in', 'is', 'not',
                        'and', 'or', 'True', 'False', 'None', 'print', 'isinstance', 'json'];
@@ -837,23 +845,29 @@ export class CyberInfoWindow {
         highlightedLine = highlightedLine.replace(regex, `<span style="color: #80ffff;">${obj}</span>`);
       });
       
-      // Highlight strings (improved version to handle multi-line strings)
-      highlightedLine = highlightedLine.replace(/(""".*?"""|'''.*?'''|"[^"]*"|'[^']*')/g, 
-        '<span style="color: #80ff80;">$1</span>');
-      
-      // Highlight comments
-      if (line.trim().startsWith('#')) {
-        highlightedLine = `<span style="color: #808080;">${highlightedLine}</span>`;
-      } else {
-        const commentMatch = highlightedLine.match(/^(.*?)(#.*)$/);
-        if (commentMatch) {
-          highlightedLine = commentMatch[1] + `<span style="color: #808080;">${this.escapeHtml(commentMatch[2])}</span>`;
+      // Highlight comments (everything after # that's not in a string)
+      const commentIndex = line.indexOf('#');
+      if (commentIndex !== -1) {
+        // Check if the # is inside a string by counting quotes before it
+        const beforeComment = line.substring(0, commentIndex);
+        const singleQuotes = (beforeComment.match(/'/g) || []).length;
+        const doubleQuotes = (beforeComment.match(/"/g) || []).length;
+        
+        // If even number of quotes, the # is not in a string
+        if (singleQuotes % 2 === 0 && doubleQuotes % 2 === 0) {
+          const beforeCommentHighlighted = highlightedLine.substring(0, highlightedLine.lastIndexOf(line.substring(commentIndex)));
+          const commentPart = line.substring(commentIndex)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+          highlightedLine = beforeCommentHighlighted + `<span style="color: #808080;">${commentPart}</span>`;
         }
       }
       
       return `<span style="color: #666;">${lineNum}│</span> ${highlightedLine}`;
     });
     
+    // Return the pre-formatted block with proper HTML (not escaped)
     return `<pre style="background: rgba(0, 0, 0, 0.3); padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 13px; line-height: 1.5; font-family: 'Courier New', monospace;">${highlightedLines.join('\n')}</pre>`;
   }
   
