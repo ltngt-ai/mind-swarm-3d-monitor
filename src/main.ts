@@ -416,9 +416,13 @@ async function initialize() {
     if (selectedAgent) {
       agentManager.selectAgent(selectedAgent.name);
       cyberInfoWindow.selectCyber(selectedAgent.name);
+      // Narrow WS subscription to the selected cyber to reduce noise
+      wsClient.subscribe([selectedAgent.name]);
     } else {
       agentManager.selectAgent(null);
       cyberInfoWindow.hide();
+      // Restore broad subscription
+      wsClient.subscribe(['*']);
     }
   });
   

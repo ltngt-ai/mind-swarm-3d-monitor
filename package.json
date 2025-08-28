@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "gen:api": "bash scripts/gen-api-types.sh"
   },
   "dependencies": {
     "@types/three": "^0.160.0",
