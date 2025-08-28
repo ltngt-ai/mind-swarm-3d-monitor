@@ -42,38 +42,23 @@ export interface SendCommandRequest {
 }
 
 // WebSocket Event Types
-export interface WebSocketMessage {
-  type: string;
-  data?: any;
-}
+// Source of truth moved to `src/ws/events.ts`.
+// Re-export payload aliases for existing imports to remain stable.
+import type {
+  EventEnvelope,
+  AgentCreated,
+  AgentTerminated,
+  AgentStateChanged,
+  AgentThinking,
+  FileActivity,
+} from './ws/events';
 
-export interface AgentCreatedEvent {
-  name: string;
-  cyber_type: string;
-  config?: object;
-}
-
-export interface AgentTerminatedEvent {
-  name: string;
-}
-
-export interface AgentStateChangedEvent {
-  name: string;
-  old_state: string;
-  new_state: string;
-}
-
-export interface AgentThinkingEvent {
-  name: string;
-  thought?: string;
-  token_count?: number;
-}
-
-export interface FileActivityEvent {
-  path: string;
-  action: string;
-  activity_level?: number;
-}
+export type WebSocketMessage = EventEnvelope;
+export type AgentCreatedEvent = AgentCreated['data'];
+export type AgentTerminatedEvent = AgentTerminated['data'];
+export type AgentStateChangedEvent = AgentStateChanged['data'];
+export type AgentThinkingEvent = AgentThinking['data'];
+export type FileActivityEvent = FileActivity['data'] & { activity_level?: number };
 
 // Developer System Types
 export interface DeveloperInfo {

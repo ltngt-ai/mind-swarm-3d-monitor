@@ -1,0 +1,36 @@
+name: Contract Check
+
+on:
+  pull_request:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  openapi-types:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate API types from local schema (if present)
+        run: |
+          if [ -f schemas/openapi.json ]; then 
+            echo "Using local schemas/openapi.json"; 
+            OPENAPI_FILE=schemas/openapi.json npm run gen:api; 
+          else 
+            echo "No local schema; skipping type generation."; 
+            exit 0; 
+          fi
+
+      - name: Fail on diffs
+        run: |
+          if [ -f schemas/openapi.json ]; then 
+            git diff --exit-code -- src/api/types.ts; 
+          else 
+            echo "No local schema; skipping diff check."; 
+          fi
