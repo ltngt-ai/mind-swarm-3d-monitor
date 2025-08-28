@@ -40,7 +40,12 @@ export interface EventEnvelope<TType extends EventType = EventType, TData = any>
 }
 
 // Per-event typed aliases
-export type AgentCreated = EventEnvelope<'agent_created', { name: string }>
+export type AgentCreated = EventEnvelope<'agent_created', {
+  name: string;
+  cyber_type?: string;
+  config?: Record<string, unknown>;
+  current_location?: string;
+}>
 export type AgentTerminated = EventEnvelope<'agent_terminated', { name: string }>
 export type QuestionCreated = EventEnvelope<'question_created', { question_id: string; text: string; created_by: string }>
 export type TaskCreated = EventEnvelope<'task_created', { task_id: string; summary: string; created_by: string }>
