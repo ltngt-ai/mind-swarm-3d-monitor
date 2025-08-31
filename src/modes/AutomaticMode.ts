@@ -451,13 +451,38 @@ export class AutomaticMode extends Mode {
         <span style="display: inline-block; animation: pulse 2s infinite;">🔴</span> LIVE STREAM
       </h3>
       <div id="current-shot" style="font-weight: bold; color: #00ff88; font-size: 22px;">Following: …</div>
-      <div id="bf-line" style="margin-top: 6px; font-size: 16px; color: #aee;"></div>
+      <div id="bf-bars" style="margin-top: 10px;">
+        <div class="bf-row">
+          <div class="bf-label">Boredom</div>
+          <div class="bf-bar"><div class="bf-fill" id="bf-boredom" style="width:0%"></div></div>
+        </div>
+        <div class="bf-row">
+          <div class="bf-label">Tiredness</div>
+          <div class="bf-bar"><div class="bf-fill" id="bf-tiredness" style="width:0%"></div></div>
+        </div>
+        <div class="bf-row">
+          <div class="bf-label">Duty</div>
+          <div class="bf-bar"><div class="bf-fill" id="bf-duty" style="width:0%"></div></div>
+        </div>
+        <div class="bf-row">
+          <div class="bf-label">Restlessness</div>
+          <div class="bf-bar"><div class="bf-fill" id="bf-restlessness" style="width:0%"></div></div>
+        </div>
+        <div class="bf-row">
+          <div class="bf-label">Memory</div>
+          <div class="bf-bar"><div class="bf-fill" id="bf-memory" style="width:0%"></div></div>
+        </div>
+      </div>
       <style>
         @keyframes pulse {
           0% { opacity: 1; }
           50% { opacity: 0.5; }
           100% { opacity: 1; }
         }
+        #bf-bars .bf-row { margin-bottom: 10px; }
+        #bf-bars .bf-label { font-size: 22px; font-weight: bold; opacity: 0.85; margin-bottom: 6px; color: #cfffff; }
+        #bf-bars .bf-bar { position: relative; width: 100%; height: 12px; background: rgba(0, 60, 120, 0.35); border: 1px solid rgba(0,255,255,0.35); border-radius: 6px; overflow: hidden; }
+        #bf-bars .bf-fill { height: 100%; background: linear-gradient(90deg, #00ffaa, #00ccff); box-shadow: 0 0 8px rgba(0, 255, 200, 0.5) inset; transition: width 0.25s ease, background 0.25s ease; }
       </style>
     `;
     
@@ -502,14 +527,55 @@ export class AutomaticMode extends Mode {
       const name = shot.target || 'Cyber';
       (shotEl as HTMLElement).textContent = `Following: ${name}`;
     }
-    const bfEl = this.streamOverlay.querySelector('#bf-line');
-    if (bfEl) {
-      const name = shot.target || '';
-      const bf = name ? this.context.agentManager.getAgentBio(name) : null;
-      const fmt = (n?: number) => (typeof n === 'number' ? Math.round(Math.max(0, Math.min(100, n))) : 0);
-      (bfEl as HTMLElement).textContent = bf
-        ? `B${fmt(bf.boredom)} T${fmt(bf.tiredness)} D${fmt(bf.duty)} R${fmt(bf.restlessness)} M${fmt(bf.memory_pressure)}`
-        : '';
+    const name = shot.target || '';
+    const bf = name ? this.context.agentManager.getAgentBio(name) : null;
+    const clamp = (n?: number) => (typeof n === 'number' ? Math.max(0, Math.min(100, Math.round(n))) : 0);
+    const hueToColor = (h:number,s=100,l=50)=>`hsl(${h}, ${s}%, ${l}%)`;
+    const blend = (c1:string,c2:string,t:number)=>`linear-gradient(90deg, ${c1}, ${c2})`;
+    const colorFor = (metric: string, v?: number) => {
+      const val = clamp(v);
+      switch (metric) {
+        case 'duty': {
+          // low red -> high green
+          const hue = Math.round((val/100)*120); // 0 red to 120 green
+          return hueToColor(hue, 90, 50);
+        }
+        case 'memory': {
+          // low teal -> high orange
+          const t = val/100;
+          return blend('#00ccff', '#ff8800', t);
+        }
+        default: { // boredom, tiredness, restlessness: low green -> high red
+          const hue = Math.round(120 - (val/100)*120); // 120 green to 0 red
+          return hueToColor(hue, 90, 50);
+        }
+      }
+    };
+    const setBar = (id: string, value?: number, metric?: string) => {
+      const el = this.streamOverlay!.querySelector(`#${id}`) as HTMLElement | null;
+      if (el) {
+        el.style.width = `${clamp(value)}%`;
+        const col = colorFor(metric || 'generic', value);
+        // If gradient string starts with 'linear-gradient', assign to background; else solid color
+        if (col.startsWith('linear-gradient')) {
+          el.style.background = col;
+        } else {
+          el.style.background = col;
+        }
+      }
+    };
+    if (bf) {
+      setBar('bf-boredom', bf.boredom, 'boredom');
+      setBar('bf-tiredness', bf.tiredness, 'tiredness');
+      setBar('bf-duty', bf.duty, 'duty');
+      setBar('bf-restlessness', bf.restlessness, 'restlessness');
+      setBar('bf-memory', bf.memory_pressure, 'memory');
+    } else {
+      setBar('bf-boredom', 0, 'boredom');
+      setBar('bf-tiredness', 0, 'tiredness');
+      setBar('bf-duty', 0, 'duty');
+      setBar('bf-restlessness', 0, 'restlessness');
+      setBar('bf-memory', 0, 'memory');
     }
   }
   
