@@ -12,40 +12,79 @@ function getServerConfig(): { host: string; port: string } {
   // Check URL parameters first
   const urlParams = new URLSearchParams(window.location.search);
   const serverParam = urlParams.get('server');
-  
+
   if (serverParam) {
-    // Support formats: "hostname:port" or just "hostname" (defaults to port 8888)
+    // Support formats:
+    //   - hostname:port
+    //   - hostname (defaults to 8888)
+    //   - full URLs: http[s]://host[:port][/base], ws[s]://host[:port][/path]
+    try {
+      if (/^https?:\/\//i.test(serverParam) || /^wss?:\/\//i.test(serverParam)) {
+        const u = new URL(serverParam);
+        const port = u.port || (u.protocol === 'https:' || u.protocol === 'wss:' ? '443' : '80');
+        return { host: u.hostname, port };
+      }
+    } catch {}
     const [host, port = '8888'] = serverParam.split(':');
     return { host, port };
   }
-  
+
   // Check localStorage for saved server
   const savedServer = localStorage.getItem('mindswarm-server');
   if (savedServer) {
     try {
       const { host, port } = JSON.parse(savedServer);
-      return { host: host || 'localhost', port: port || '8888' };
+      return { host: host || '192.168.1.129', port: port || '8888' };
     } catch (e) {
       console.warn('Invalid saved server config:', e);
     }
   }
   
   // Default to localhost
-  return { host: 'localhost', port: '8888' };
+  return { host: '192.168.1.129', port: '8888' };
 }
 
 // Build configuration
 export function getConfig(): Config {
   const { host, port } = getServerConfig();
-  
-  // Determine protocol based on current page protocol
-  const isSecure = window.location.protocol === 'https:';
-  const httpProtocol = isSecure ? 'https' : 'http';
-  const wsProtocol = isSecure ? 'wss' : 'ws';
-  
+
+  // URL overrides allow advanced setups
+  const urlParams = new URLSearchParams(window.location.search);
+  const apiOverride = urlParams.get('api'); // e.g. https://server:443/base
+  const wsOverride = urlParams.get('ws');   // e.g. wss://server:443/path
+  const basePath = urlParams.get('base') || ''; // prefix like /mind-swarm
+
+  // Helper to normalize path joining
+  const join = (a: string, b: string) => {
+    if (!b) return a;
+    const as = a.endsWith('/') ? a.slice(0, -1) : a;
+    const bs = b.startsWith('/') ? b : `/${b}`;
+    return `${as}${bs}`;
+  };
+
+  // Determine protocol defaults based on PAGE protocol, but allow explicit overrides
+  const pageSecure = window.location.protocol === 'https:';
+  const defaultHttp = pageSecure ? 'https' : 'http';
+  const defaultWs = pageSecure ? 'wss' : 'ws';
+
+  // Build base URLs
+  const apiUrl = apiOverride || `${defaultHttp}://${host}:${port}${basePath}`;
+  let wsUrl = wsOverride || `${defaultWs}://${host}:${port}${join(basePath, 'ws')}`;
+
+  // If apiOverride is https/http and wsOverride is not set, try to infer matching ws scheme
+  if (!wsOverride && apiOverride) {
+    try {
+      const au = new URL(apiOverride);
+      const wsScheme = au.protocol === 'https:' ? 'wss' : 'ws';
+      wsUrl = `${wsScheme}://${au.host}${join(au.pathname, 'ws')}`;
+    } catch {
+      // ignore
+    }
+  }
+
   return {
-    apiUrl: `${httpProtocol}://${host}:${port}`,
-    wsUrl: `${wsProtocol}://${host}:${port}/ws`,
+    apiUrl,
+    wsUrl,
     autoReconnect: true,
     reconnectInterval: 5000
   };

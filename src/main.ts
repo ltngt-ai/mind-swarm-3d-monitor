@@ -9,14 +9,12 @@ import { AgentManager } from './AgentManager';
 import { GridSystem } from './GridSystem';
 import { FilesystemVisualizer } from './FilesystemVisualizer';
 import { WebSocketClient } from './WebSocketClient';
-import { config, createServerSelector } from './config';
+import { config } from './config';
 
 // Mode system
 import { ModeManager, AppMode } from './modes/ModeManager';
 import { ModeContext } from './modes/Mode';
 import { AutomaticMode } from './modes/AutomaticMode';
-import { UserMode } from './modes/UserMode';
-import { DeveloperMode } from './modes/DeveloperMode';
 
 // Camera system
 import { CameraController } from './camera/CameraController';
@@ -74,6 +72,8 @@ const cameraController = new CameraController(camera, renderer);
 
 // GUI Setup
 const gui = new GUI();
+// Hide debug GUI overlay for a cleaner presentation
+(gui as any).domElement && ((gui as any).domElement.style.display = 'none');
 
 // Lighting
 const ambientLight = new THREE.AmbientLight(0x0080ff, 0.1);
@@ -112,8 +112,6 @@ const modeContext: ModeContext = {
 // Initialize mode manager and register modes
 const modeManager = new ModeManager(modeContext);
 modeManager.registerMode(AppMode.AUTOMATIC, new AutomaticMode(modeContext));
-modeManager.registerMode(AppMode.USER, new UserMode(modeContext));
-modeManager.registerMode(AppMode.DEVELOPER, new DeveloperMode(modeContext));
 
 // Handle WebSocket events
 wsClient.on('agent_created', (data: AgentCreatedEvent) => {
@@ -393,14 +391,13 @@ function animate() {
 
 // Initialize everything
 async function initialize() {
-  // Create server selector UI
-  document.body.appendChild(createServerSelector());
+  // Server selector UI removed for streamlined display
   
   // Initialize CyberInfoWindow with camera controller
   cyberInfoWindow = new CyberInfoWindow(wsClient, agentManager, cameraController);
   
   // Initialize mode manager with default mode
-  await modeManager.initialize(AppMode.USER);
+  await modeManager.initialize(AppMode.AUTOMATIC);
   
   // Add click handler for selecting cybers
   renderer.domElement.addEventListener('click', (event) => {

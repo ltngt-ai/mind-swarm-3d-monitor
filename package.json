@@ -6,6 +6,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
     "gen:api": "bash scripts/gen-api-types.sh"
   },
   "dependencies": {

@@ -143,53 +143,31 @@ export class ModeManager {
     });
   }
 
-  private updateModeIndicator(mode: AppMode): void {
-    // Create or update mode indicator in UI
-    let indicator = document.getElementById('mode-indicator');
-    if (!indicator) {
-      indicator = document.createElement('div');
-      indicator.id = 'mode-indicator';
-      indicator.style.cssText = `
-        position: fixed;
-        top: 10px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgba(0, 20, 40, 0.9);
-        border: 1px solid #00ffff;
-        border-radius: 20px;
-        padding: 8px 20px;
-        color: #00ffff;
-        font-family: 'Courier New', monospace;
-        font-size: 14px;
-        z-index: 1000;
-        pointer-events: none;
-        transition: all 0.3s ease;
-      `;
-      document.body.appendChild(indicator);
-    }
-    
-    const modeNames: Record<AppMode, string> = {
-      [AppMode.AUTOMATIC]: '🎬 Automatic Mode',
-      [AppMode.USER]: '👤 User Mode',
-      [AppMode.DEVELOPER]: '⚙️ Developer Mode'
-    };
-    
-    indicator.textContent = modeNames[mode];
-    
-    // Pulse animation
-    indicator.style.transform = 'translateX(-50%) scale(1.1)';
-    setTimeout(() => {
-      indicator.style.transform = 'translateX(-50%) scale(1)';
-    }, 200);
+  private updateModeIndicator(_mode: AppMode): void {
+    // Mode indicator disabled for simplified UI
+    const indicator = document.getElementById('mode-indicator');
+    if (indicator) indicator.remove();
   }
 
   async initialize(defaultMode?: AppMode): Promise<void> {
-    // Load saved mode or use default
+    // Determine desired mode from URL, default, or saved; only use if registered
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlModeParam = (urlParams.get('mode') || '').toLowerCase() as AppMode;
+    const isRegistered = (m?: AppMode | null) => !!m && this.modes.has(m);
+    const pick = (...candidates: (AppMode | undefined)[]): AppMode => {
+      for (const c of candidates) { if (isRegistered(c as AppMode)) return c as AppMode; }
+      // Fallback to first registered mode
+      return (this.modes.keys().next().value as AppMode) || AppMode.AUTOMATIC;
+    };
+
     const savedMode = localStorage.getItem('mindswarm-mode') as AppMode;
-    const modeToLoad = savedMode || defaultMode || AppMode.USER;
+    const modeToLoad = pick(urlModeParam, defaultMode, savedMode, AppMode.AUTOMATIC);
+    if (savedMode && !isRegistered(savedMode)) {
+      // Clean up stale preference
+      localStorage.removeItem('mindswarm-mode');
+    }
     
-    // Create mode selector UI
-    this.createModeSelectorUI();
+    // Mode selector UI removed for simplified presentation
     
     // Switch to initial mode
     await this.switchMode(modeToLoad);
@@ -212,11 +190,13 @@ export class ModeManager {
       z-index: 999;
     `;
     
-    const modes: { type: AppMode; label: string; icon: string; key: string }[] = [
-      { type: AppMode.AUTOMATIC, label: 'Automatic', icon: '🎬', key: '1' },
-      { type: AppMode.USER, label: 'User', icon: '👤', key: '2' },
-      { type: AppMode.DEVELOPER, label: 'Developer', icon: '⚙️', key: '3' }
-    ];
+    const meta: Record<AppMode, { label: string; icon: string; key: string }> = {
+      [AppMode.AUTOMATIC]: { label: 'Automatic', icon: '🎬', key: '1' },
+      [AppMode.USER]: { label: 'User', icon: '👤', key: '2' },
+      [AppMode.DEVELOPER]: { label: 'Developer', icon: '⚙️', key: '3' }
+    };
+    // Only show buttons for registered modes
+    const modes: { type: AppMode; label: string; icon: string; key: string }[] = Array.from(this.modes.keys()).map(type => ({ type, ...meta[type] }));
     
     modes.forEach(mode => {
       const button = document.createElement('button');

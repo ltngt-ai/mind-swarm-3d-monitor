@@ -4,9 +4,9 @@ import { CameraMode } from '../camera/CameraController';
 import { eventBus, Events } from '../utils/EventBus';
 
 interface CameraShot {
-  type: 'overview' | 'cyber-focus' | 'filesystem' | 'activity-zone' | 'cinematic';
+  type: 'cyber-focus';
   duration: number;
-  target?: string; // Cyber name or location
+  target?: string; // Cyber name
   position?: THREE.Vector3;
   lookAt?: THREE.Vector3;
 }
@@ -30,7 +30,6 @@ export class AutomaticMode extends Mode {
   // UI elements
   private streamOverlay?: HTMLDivElement;
   private activityFeed?: HTMLDivElement;
-  private statsPanel?: HTMLDivElement;
 
   constructor(context: ModeContext) {
     super('Automatic', context);
@@ -40,8 +39,7 @@ export class AutomaticMode extends Mode {
   protected setupUI(): void {
     // Create streaming overlay
     this.createStreamOverlay();
-    this.createActivityFeed();
-    this.createStatsPanel();
+    // Stats panel disabled for a cleaner view
     
     // Add GUI controls
     if (this.guiFolder) {
@@ -77,18 +75,16 @@ export class AutomaticMode extends Mode {
   }
 
   protected async onActivate(): Promise<void> {
-    // Disable manual camera controls
+    // Disable manual camera controls and follow cybers
     this.context.cameraController.enableControls(false);
-    this.context.cameraController.setMode(CameraMode.CINEMATIC);
-    
-    // Set initial camera position
-    this.context.cameraController.setAutoRotate(true, 0.5);
-    
-    // Start with an overview shot
-    this.queueShot({
-      type: 'overview',
-      duration: 8000
-    });
+    this.context.cameraController.setMode(CameraMode.FOLLOW);
+    this.context.cameraController.setAutoRotate(false);
+
+    // Start with a cyber-focus shot if available
+    const firstTarget = this.pickTargetCyber();
+    if (firstTarget) {
+      this.queueShot({ type: 'cyber-focus', duration: 8000, target: firstTarget });
+    }
     
     // Execute the first shot immediately
     this.switchShot();
@@ -99,9 +95,8 @@ export class AutomaticMode extends Mode {
     // Show streaming UI
     if (this.streamOverlay) this.streamOverlay.style.display = 'block';
     if (this.activityFeed) this.activityFeed.style.display = 'block';
-    if (this.statsPanel) this.statsPanel.style.display = 'block';
     
-    this.showNotification('Automatic mode activated - Camera directing enabled', 'info');
+    this.showNotification('Automatic mode activated - Following cybers', 'info');
   }
 
   protected async onDeactivate(): Promise<void> {
@@ -113,7 +108,6 @@ export class AutomaticMode extends Mode {
     // Hide streaming UI
     if (this.streamOverlay) this.streamOverlay.style.display = 'none';
     if (this.activityFeed) this.activityFeed.style.display = 'none';
-    if (this.statsPanel) this.statsPanel.style.display = 'none';
     
     // Clear shot queue
     this.shotQueue = [];
@@ -122,6 +116,15 @@ export class AutomaticMode extends Mode {
 
   update(_deltaTime: number): void {
     const now = Date.now();
+
+    // If we don't yet have a target but agents exist, pick one now
+    if ((!this.currentShot || !this.currentShot.target) && this.context.agentManager.getAgentCount() > 0) {
+      const t = this.pickTargetCyber();
+      if (t) {
+        this.queueShot({ type: 'cyber-focus', duration: this.minShotDuration, target: t });
+        this.switchShot();
+      }
+    }
     
     // Check if it's time to switch shots
     if (this.currentShot && now - this.lastShotChange > this.currentShot.duration) {
@@ -144,8 +147,7 @@ export class AutomaticMode extends Mode {
       this.lastActivityCheck = now;
     }
     
-    // Update UI
-    this.updateStatsPanel();
+    // Update UI (stats panel removed)
   }
 
   handleKeyPress(key: string): boolean {
@@ -212,52 +214,12 @@ export class AutomaticMode extends Mode {
   }
 
   private planNextShot(): void {
-    // Find the most active cyber
-    let mostActiveCyber: string | null = null;
-    let maxActivity = 0;
-    
-    for (const [cyber, activity] of this.cyberActivity) {
-      if (activity > maxActivity) {
-        maxActivity = activity;
-        mostActiveCyber = cyber;
-      }
-    }
-    
-    // Smart shot selection based on activity and variety
-    const lastShotType = this.currentShot?.type;
-    let nextShotType: CameraShot['type'];
-    
-    // Avoid repeating the same shot type
-    const allShots: CameraShot['type'][] = ['overview', 'cyber-focus', 'filesystem', 'activity-zone', 'cinematic'];
-    const availableShots = allShots.filter(type => type !== lastShotType);
-    
-    if (mostActiveCyber && maxActivity > 3) {
-      // High activity - focus on the action
-      if (Math.random() < 0.7) {
-        nextShotType = 'cyber-focus';
-      } else {
-        nextShotType = 'activity-zone';
-      }
-      
+    const target = this.pickTargetCyber();
+    if (target) {
       this.queueShot({
-        type: nextShotType,
+        type: 'cyber-focus',
         duration: this.minShotDuration + Math.random() * 5000,
-        target: mostActiveCyber
-      });
-    } else if (this.recentEvents.length > 10) {
-      // Moderate activity - mix of shots
-      nextShotType = availableShots[Math.floor(Math.random() * availableShots.length)];
-      this.queueShot({
-        type: nextShotType,
-        duration: this.minShotDuration + Math.random() * (this.maxShotDuration - this.minShotDuration) * 0.7
-      });
-    } else {
-      // Low activity - scenic shots
-      const scenicShots: CameraShot['type'][] = ['overview', 'filesystem', 'cinematic'];
-      nextShotType = scenicShots[Math.floor(Math.random() * scenicShots.length)];
-      this.queueShot({
-        type: nextShotType,
-        duration: this.maxShotDuration * 0.8 + Math.random() * this.maxShotDuration * 0.2
+        target
       });
     }
   }
@@ -281,32 +243,18 @@ export class AutomaticMode extends Mode {
   }
 
   private generateRandomShot(): CameraShot {
-    const types: CameraShot['type'][] = ['overview', 'filesystem', 'cinematic'];
+    const target = this.pickTargetCyber();
     return {
-      type: types[Math.floor(Math.random() * types.length)],
+      type: 'cyber-focus',
+      target: target || undefined,
       duration: this.minShotDuration + Math.random() * (this.maxShotDuration - this.minShotDuration)
     };
   }
 
   private executeShot(shot: CameraShot): void {
-    switch (shot.type) {
-      case 'overview':
-        this.executeOverviewShot();
-        break;
-      case 'cyber-focus':
-        if (shot.target) {
-          this.executeCyberFocusShot(shot.target);
-        }
-        break;
-      case 'filesystem':
-        this.executeFilesystemShot();
-        break;
-      case 'activity-zone':
-        this.executeActivityZoneShot();
-        break;
-      case 'cinematic':
-        this.startCinematicSequence();
-        break;
+    if (shot.type === 'cyber-focus') {
+      const target = shot.target || this.pickTargetCyber();
+      if (target) this.executeCyberFocusShot(target);
     }
   }
 
@@ -409,6 +357,13 @@ export class AutomaticMode extends Mode {
   private onCyberActivity(data: any): void {
     const activity = this.cyberActivity.get(data.cyber) || 0;
     this.cyberActivity.set(data.cyber, activity + 1);
+    // If not currently following a specific cyber, pivot to this one
+    if (!this.currentShot || !this.currentShot.target) {
+      this.queueShot({ type: 'cyber-focus', duration: this.minShotDuration, target: data.cyber });
+      if (!this.currentShot) {
+        this.switchShot();
+      }
+    }
     
     // Decay activity over time
     setTimeout(() => {
@@ -454,31 +409,25 @@ export class AutomaticMode extends Mode {
     this.streamOverlay.id = 'stream-overlay';
     this.streamOverlay.style.cssText = `
       position: fixed;
-      top: 60px;
-      left: 20px;
-      background: rgba(0, 20, 40, 0.7);
+      top: 40px;
+      left: 24px;
+      background: rgba(0, 20, 40, 0.8);
       border: 1px solid #00ffff;
-      border-radius: 10px;
-      padding: 15px;
+      border-radius: 12px;
+      padding: 24px;
       color: #00ffff;
       font-family: 'Courier New', monospace;
-      font-size: 12px;
-      max-width: 250px;
+      font-size: 18px;
+      max-width: 520px;
       display: none;
       z-index: 500;
     `;
     
     this.streamOverlay.innerHTML = `
-      <h3 style="margin: 0 0 10px 0; font-size: 14px;">
+      <h3 style="margin: 0 0 14px 0; font-size: 24px;">
         <span style="display: inline-block; animation: pulse 2s infinite;">🔴</span> LIVE STREAM
       </h3>
-      <div id="current-shot" style="font-weight: bold; color: #00ff88;">Shot: Overview</div>
-      <div id="shot-timer" style="opacity: 0.8;">Next in: 0s</div>
-      <div id="next-shot" style="opacity: 0.6; font-size: 11px;">Next: Planning...</div>
-      <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(0, 255, 255, 0.3);">
-        <div style="font-size: 10px; opacity: 0.7;">Camera Mode: <span id="camera-mode">Automatic</span></div>
-        <div style="font-size: 10px; opacity: 0.7;">Queue: <span id="queue-size">0</span> shots</div>
-      </div>
+      <div id="current-shot" style="font-weight: bold; color: #00ff88; font-size: 22px;">Following: …</div>
       <style>
         @keyframes pulse {
           0% { opacity: 1; }
@@ -520,80 +469,19 @@ export class AutomaticMode extends Mode {
     document.body.appendChild(this.activityFeed);
   }
 
-  private createStatsPanel(): void {
-    this.statsPanel = document.createElement('div');
-    this.statsPanel.id = 'stats-panel';
-    this.statsPanel.style.cssText = `
-      position: fixed;
-      top: 60px;
-      right: 20px;
-      background: rgba(0, 20, 40, 0.7);
-      border: 1px solid #0080ff;
-      border-radius: 10px;
-      padding: 15px;
-      color: #00ffff;
-      font-family: 'Courier New', monospace;
-      font-size: 11px;
-      display: none;
-      z-index: 500;
-    `;
-    
-    this.statsPanel.innerHTML = `
-      <h4 style="margin: 0 0 10px 0; font-size: 12px;">System Stats</h4>
-      <div>Active Cybers: <span id="active-cybers">0</span></div>
-      <div>Messages/min: <span id="messages-rate">0</span></div>
-      <div>Events/min: <span id="events-rate">0</span></div>
-    `;
-    
-    document.body.appendChild(this.statsPanel);
-  }
+  // createStatsPanel removed for simplified UI
 
   private updateStreamOverlay(shot: CameraShot): void {
     if (!this.streamOverlay) return;
-    
     const shotEl = this.streamOverlay.querySelector('#current-shot');
     if (shotEl) {
-      const shotName = this.getShotDisplayName(shot);
-      shotEl.textContent = `Shot: ${shotName}`;
-    }
-    
-    const nextEl = this.streamOverlay.querySelector('#next-shot');
-    if (nextEl) {
-      if (this.shotQueue.length > 0) {
-        const next = this.shotQueue[0];
-        nextEl.textContent = `Next: ${this.getShotDisplayName(next)}`;
-      } else {
-        nextEl.textContent = 'Next: Planning...';
-      }
-    }
-    
-    const queueEl = this.streamOverlay.querySelector('#queue-size');
-    if (queueEl) {
-      queueEl.textContent = this.shotQueue.length.toString();
-    }
-    
-    const modeEl = this.streamOverlay.querySelector('#camera-mode');
-    if (modeEl) {
-      modeEl.textContent = shot.type === 'cinematic' ? 'Cinematic' : 
-                          shot.type === 'cyber-focus' ? 'Following' : 'Automatic';
+      const name = shot.target || 'Cyber';
+      (shotEl as HTMLElement).textContent = `Following: ${name}`;
     }
   }
   
   private getShotDisplayName(shot: CameraShot): string {
-    switch (shot.type) {
-      case 'overview':
-        return '🌍 Overview';
-      case 'cyber-focus':
-        return `👁️ ${shot.target || 'Cyber'}`;
-      case 'filesystem':
-        return '📁 Filesystem';
-      case 'activity-zone':
-        return '⚡ Activity Zone';
-      case 'cinematic':
-        return '🎬 Cinematic';
-      default:
-        return shot.type;
-    }
+    return `👁️ ${shot.target || 'Cyber'}`;
   }
 
   private updateActivityFeed(): void {
@@ -611,19 +499,18 @@ export class AutomaticMode extends Mode {
     }).join('');
   }
 
-  private updateStatsPanel(): void {
-    if (!this.statsPanel) return;
-    
-    const activeCybers = this.context.agentManager.getAgentCount();
-    const cyberEl = this.statsPanel.querySelector('#active-cybers');
-    if (cyberEl) cyberEl.textContent = activeCybers.toString();
-    
-    // Calculate rates
-    const recentMessages = this.recentEvents.filter(e => e.type === 'message').length;
-    const messageEl = this.statsPanel.querySelector('#messages-rate');
-    if (messageEl) messageEl.textContent = recentMessages.toString();
-    
-    const eventEl = this.statsPanel.querySelector('#events-rate');
-    if (eventEl) eventEl.textContent = this.recentEvents.length.toString();
+  // updateStatsPanel removed for simplified UI
+
+  private pickTargetCyber(): string | null {
+    // Prefer most active cyber first
+    let best: string | null = null;
+    let max = -1;
+    for (const [cyber, score] of this.cyberActivity) {
+      if (score > max) { max = score; best = cyber; }
+    }
+    if (best) return best;
+    // Fallback to first known agent
+    const names = this.context.agentManager.getAgentNames();
+    return names.length > 0 ? names[0] : null;
   }
 }

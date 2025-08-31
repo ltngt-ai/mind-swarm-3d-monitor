@@ -14,7 +14,7 @@ A Tron-inspired 3D visualization interface for monitoring Mind-Swarm agents in r
 ## Prerequisites
 
 - Node.js 16+ and npm
-- Mind-Swarm server running (default: localhost:8888)
+- Mind-Swarm server running (default: 192.168.1.129:8888)
 - Modern web browser with WebGL support
 
 ## Installation
@@ -31,7 +31,7 @@ npm install
 npm run dev
 ```
 
-The monitor will be available at http://localhost:5173
+The monitor will be available at http://localhost:5175
 
 ## Usage
 
@@ -104,6 +104,17 @@ npm run build
 
 # Preview production build
 npm run preview
+```
+
+## Quick Start
+
+```bash
+# Install deps and launch (with server check)
+./start.sh
+
+# Or run manually
+npm install
+npm run dev
 ```
 
 ## License

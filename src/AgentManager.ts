@@ -392,6 +392,10 @@ export class AgentManager {
     return this.agents.get(name) || null;
   }
 
+  getAgentNames(): string[] {
+    return Array.from(this.agents.keys());
+  }
+
   showThought(agentName: string, thought: string) {
     const agent = this.agents.get(agentName);
     if (!agent) return;
