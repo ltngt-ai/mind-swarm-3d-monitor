@@ -217,7 +217,9 @@ export class AgentManager {
   
   // Update connection line between agent and its current location
   private updateConnectionLine(agent: AgentData, locationPosition: THREE.Vector3) {
-    const start = new THREE.Vector3(locationPosition.x, locationPosition.y + 5, locationPosition.z);
+    // Anchor to the tower's top to avoid visual offset
+    const topY = this.filesystemVisualizer?.getTowerHeight?.(agent.currentLocation || '') ?? (locationPosition.y + 5);
+    const start = new THREE.Vector3(locationPosition.x, topY, locationPosition.z);
     const end = new THREE.Vector3(agent.targetPosition.x, agent.targetPosition.y, agent.targetPosition.z);
     const color = this.getAgentColor(agent.state);
 
@@ -690,7 +692,8 @@ export class AgentManager {
       if (agent.connectionLine && agent.currentLocation && this.filesystemVisualizer) {
         const locationPosition = this.getFilesystemLocationPosition(agent.currentLocation);
         if (locationPosition) {
-          const start = new THREE.Vector3(locationPosition.x, locationPosition.y + 5, locationPosition.z);
+          const topY = this.filesystemVisualizer?.getTowerHeight?.(agent.currentLocation || '') ?? (locationPosition.y + 5);
+          const start = new THREE.Vector3(locationPosition.x, topY, locationPosition.z);
           const end = new THREE.Vector3(agent.mesh.position.x, agent.mesh.position.y, agent.mesh.position.z);
           const obj = agent.connectionLine as THREE.Object3D;
           const dir = new THREE.Vector3().subVectors(end, start);

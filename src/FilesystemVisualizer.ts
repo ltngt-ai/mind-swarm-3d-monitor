@@ -22,6 +22,8 @@ export class FilesystemVisualizer {
   private filesystemStructure: FilesystemStructure | null = null;
   private updateInterval: NodeJS.Timeout | null = null;
   private apiUrl: string = config.apiUrl;
+  // Track visual heights per tower key to precisely anchor links
+  private towerHeights: Map<string, number> = new Map();
   
   // Instanced link meshes (filesystem tower connections)
   private linkCoreInst?: THREE.InstancedMesh;
@@ -30,6 +32,8 @@ export class FilesystemVisualizer {
   private linkCount: number = 0;
   private linkDummy: THREE.Object3D = new THREE.Object3D();
   private useInstancing: boolean = false; // fallback to per-link meshes if false
+  // Group to contain all link-related objects (instanced or fallback tubes)
+  private linkGroup: THREE.Group = new THREE.Group();
   
   // Color scheme for different directory types
   private directoryColors: DirectoryColors = {
@@ -47,6 +51,8 @@ export class FilesystemVisualizer {
     this.scene = scene;
     this.rootGroup = new THREE.Group();
     this.scene.add(this.rootGroup);
+    // Contain all links in a dedicated group so we can clear them reliably
+    this.rootGroup.add(this.linkGroup);
     
     // Base geometries for towers and files
     this.towerGeometry = new THREE.BoxGeometry(4, 1, 4);
@@ -227,25 +233,44 @@ export class FilesystemVisualizer {
     });
     this.towers.clear();
     this.towerPositions.clear();
+    this.towerHeights.clear();
     this.clearLinks();
   }
 
   // Remove and dispose instanced link meshes
   private clearLinks(): void {
+    // Dispose instanced links if present
     if (this.linkCoreInst) {
-      this.rootGroup.remove(this.linkCoreInst);
+      this.linkGroup.remove(this.linkCoreInst);
       this.linkCoreInst.geometry.dispose();
       (this.linkCoreInst.material as THREE.Material).dispose();
       this.linkCoreInst.dispose();
       this.linkCoreInst = undefined;
     }
     if (this.linkHaloInst) {
-      this.rootGroup.remove(this.linkHaloInst);
+      this.linkGroup.remove(this.linkHaloInst);
       this.linkHaloInst.geometry.dispose();
       (this.linkHaloInst.material as THREE.Material).dispose();
       this.linkHaloInst.dispose();
       this.linkHaloInst = undefined;
     }
+
+    // Also dispose any fallback link tubes previously added to linkGroup
+    // Traverse and dispose geometries/materials for all children
+    this.linkGroup.children.slice().forEach(child => {
+      this.linkGroup.remove(child);
+      child.traverse((obj) => {
+        const mesh = obj as unknown as THREE.Mesh;
+        if ((mesh as any).geometry) {
+          ((mesh as any).geometry as THREE.BufferGeometry).dispose?.();
+        }
+        const mat: any = (mesh as any).material;
+        if (mat) {
+          if (Array.isArray(mat)) mat.forEach((m: THREE.Material) => m.dispose?.());
+          else mat.dispose?.();
+        }
+      });
+    });
     this.linkCapacity = 0;
     this.linkCount = 0;
   }
@@ -276,8 +301,8 @@ export class FilesystemVisualizer {
     haloInst.frustumCulled = false;
     haloInst.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(newCapacity * 3), 3);
 
-    this.rootGroup.add(coreInst);
-    this.rootGroup.add(haloInst);
+    this.linkGroup.add(coreInst);
+    this.linkGroup.add(haloInst);
     this.linkCoreInst = coreInst;
     this.linkHaloInst = haloInst;
     this.linkCapacity = newCapacity;
@@ -359,6 +384,7 @@ export class FilesystemVisualizer {
     const pathKey = directory.path || directory.name;
     this.towers.set(pathKey, mainTower);
     this.towerPositions.set(pathKey, position.clone());
+    this.towerHeights.set(pathKey, height);
     
     // Also store with simplified paths for easier matching
     const simplifiedPaths = [
@@ -370,6 +396,9 @@ export class FilesystemVisualizer {
     simplifiedPaths.forEach(p => {
       if (p && !this.towerPositions.has(p)) {
         this.towerPositions.set(p, position.clone());
+      }
+      if (p && !this.towerHeights.has(p)) {
+        this.towerHeights.set(p, height);
       }
     });
     
@@ -391,8 +420,11 @@ export class FilesystemVisualizer {
           
           // Only connect if tower was actually created (not filtered)
           if (subTower.children.length > 0) {
-            // Connect sub-tower to main tower with a line (from top of parent tower)
-            this.createConnectionLine(position, subPositions[subIndex], height, colors.primary);
+            // Determine child height from registry; fallback to a small elevation
+            const childKey = child.path || child.name;
+            const childHeight = this.getTowerHeight(childKey) ?? 5;
+            // Connect sub-tower to main tower with a line (top-to-top)
+            this.createConnectionLine(position, subPositions[subIndex], height, colors.primary, childHeight);
           }
           
           subIndex++;
@@ -580,6 +612,8 @@ export class FilesystemVisualizer {
     this.towers.set(cyberHome.name, group);
     this.towerPositions.set(cyberHome.path, position);
     this.towerPositions.set(cyberHome.name, position); // Also store by name
+    this.towerHeights.set(cyberHome.path, height);
+    this.towerHeights.set(cyberHome.name, height);
     
     return group;
   }
@@ -589,10 +623,12 @@ export class FilesystemVisualizer {
     parentPos: THREE.Vector3,
     childPos: THREE.Vector3,
     parentHeight: number,
-    color: number
+    color: number,
+    childHeight?: number
   ): void {
     const start = new THREE.Vector3(parentPos.x, parentHeight, parentPos.z);
-    const end = new THREE.Vector3(childPos.x, 5, childPos.z);
+    const endY = typeof childHeight === 'number' ? childHeight : 5;
+    const end = new THREE.Vector3(childPos.x, endY, childPos.z);
     if (this.useInstancing) {
       this.addLinkInstance(start, end, color);
     } else {
@@ -627,7 +663,7 @@ export class FilesystemVisualizer {
     const yAxis = new THREE.Vector3(0, 1, 0);
     group.quaternion.setFromUnitVectors(yAxis, dir.clone().normalize());
     group.scale.set(1, length, 1);
-    this.rootGroup.add(group);
+    this.linkGroup.add(group);
   }
 
   // Create a main directory tower
@@ -711,6 +747,7 @@ export class FilesystemVisualizer {
     this.rootGroup.add(group);
     this.towers.set(name, group);
     this.towerPositions.set(name, position);
+    this.towerHeights.set(name, height);
     
     return group;
   }
@@ -796,6 +833,35 @@ export class FilesystemVisualizer {
     this.rootGroup.add(group);
     
     return group;
+  }
+
+  // Get stored height for a given tower key/path using the same relaxed matching as getTowerPosition
+  getTowerHeight(path: string): number | null {
+    let h = this.towerHeights.get(path);
+    if (typeof h === 'number') return h;
+    const pathParts = path.split('/').filter(p => p.length > 0);
+    const possible = [
+      pathParts.join('/'),
+      pathParts.length > 3 ? pathParts.slice(0, 4).join('/') : null,
+      pathParts.length > 2 ? pathParts.slice(0, 3).join('/') : null,
+      pathParts.length > 1 ? pathParts.slice(0, 2).join('/') : null,
+      pathParts.slice(-2).join('/'),
+      pathParts[pathParts.length - 1],
+      pathParts[0]
+    ].filter(Boolean) as string[];
+    for (const key of possible) {
+      h = this.towerHeights.get(key);
+      if (typeof h === 'number') return h;
+    }
+    return null;
+  }
+
+  // Convenience: get the top world position for a tower path
+  getTowerTopPosition(path: string): THREE.Vector3 | null {
+    const pos = this.getTowerPosition(path);
+    if (!pos) return null;
+    const h = this.getTowerHeight(path) ?? 5;
+    return new THREE.Vector3(pos.x, h, pos.z);
   }
 
   // Pulse a tower to show activity (improved path handling)
@@ -955,8 +1021,9 @@ export class FilesystemVisualizer {
     if (!tower) return;
     
     // Create a temporary line showing file access
+    const startY = this.getTowerHeight(towerName) ?? 5;
     const points = [
-      new THREE.Vector3(tower.position.x, 5, tower.position.z),
+      new THREE.Vector3(tower.position.x, startY, tower.position.z),
       new THREE.Vector3(agentPosition.x, agentPosition.y, agentPosition.z)
     ];
     
@@ -969,7 +1036,7 @@ export class FilesystemVisualizer {
     });
     
     const line = new THREE.Line(geometry, material);
-    this.scene.add(line);
+    this.linkGroup.add(line);
     
     // Fade out and remove
     const fadeOut = () => {
@@ -977,7 +1044,7 @@ export class FilesystemVisualizer {
       if (material.opacity > 0) {
         requestAnimationFrame(fadeOut);
       } else {
-        this.scene.remove(line);
+        this.linkGroup.remove(line);
         geometry.dispose();
         material.dispose();
       }
