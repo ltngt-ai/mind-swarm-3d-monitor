@@ -174,14 +174,17 @@ wsClient.on('file_activity', (data: FileActivityEvent) => {
 
 // Biofeedback stats -> update agents and UI
 wsClient.on('biofeedback', (data: any) => {
+  console.log('Biofeedback event received:', JSON.stringify(data));
   if (data && data.cyber) {
-    agentManager.updateAgentBiofeedback(data.cyber, {
+    const bioData = {
       boredom: data.boredom,
       tiredness: data.tiredness,
       duty: data.duty,
       restlessness: data.restlessness,
       memory_pressure: data.memory_pressure
-    });
+    };
+    console.log('Updating agent bio with:', bioData);
+    agentManager.updateAgentBiofeedback(data.cyber, bioData);
   }
 });
 

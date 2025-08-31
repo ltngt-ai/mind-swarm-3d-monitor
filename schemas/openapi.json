@@ -1467,13 +1467,15 @@
         "title": "BiofeedbackState",
         "properties": {
           "cyber": { "type": "string", "title": "Cyber" },
-          "arousal": { "type": "number", "title": "Arousal" },
-          "valence": { "type": "number", "title": "Valence" },
-          "attention": { "type": "number", "title": "Attention" },
-          "heart_rate": { "anyOf": [{"type": "number"}, {"type": "null"}], "title": "Heart Rate" },
+          "boredom": { "type": "number", "title": "Boredom", "minimum": 0, "maximum": 100 },
+          "tiredness": { "type": "number", "title": "Tiredness", "minimum": 0, "maximum": 100 },
+          "duty": { "type": "number", "title": "Duty", "minimum": 0, "maximum": 100 },
+          "restlessness": { "type": "number", "title": "Restlessness", "minimum": 0, "maximum": 100 },
+          "memory_pressure": { "type": "number", "title": "Memory Pressure", "minimum": 0, "maximum": 100 },
+          "cycle": { "anyOf": [{"type": "integer"}, {"type": "null"}], "title": "Cycle" },
           "timestamp": { "type": "string", "title": "Timestamp" }
         },
-        "required": ["cyber", "timestamp"]
+        "required": ["cyber", "boredom", "tiredness", "duty", "restlessness", "memory_pressure", "timestamp"]
       },
       "BiofeedbackHistoryResponse": {
         "type": "object",
