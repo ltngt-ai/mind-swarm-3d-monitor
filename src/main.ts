@@ -172,6 +172,19 @@ wsClient.on('file_activity', (data: FileActivityEvent) => {
   }
 });
 
+// Biofeedback stats -> update agents and UI
+wsClient.on('biofeedback', (data: any) => {
+  if (data && data.cyber) {
+    agentManager.updateAgentBiofeedback(data.cyber, {
+      boredom: data.boredom,
+      tiredness: data.tiredness,
+      duty: data.duty,
+      restlessness: data.restlessness,
+      memory_pressure: data.memory_pressure
+    });
+  }
+});
+
 // Disabled - we now show reflections instead of real-time thoughts
 // wsClient.on('agent_thinking', (data: AgentThinkingEvent) => {
 //   // Show thought bubble above agent
@@ -219,6 +232,14 @@ wsClient.on('status_update', (data: any) => {
       if (cyberData.state && agent && agent.state !== cyberData.state.toLowerCase()) {
         agentManager.updateAgentState(name, cyberData.state.toLowerCase());
       }
+      // Update biofeedback if available
+      agentManager.updateAgentBiofeedback(name, {
+        boredom: cyberData.boredom,
+        tiredness: cyberData.tiredness,
+        duty: cyberData.duty,
+        restlessness: cyberData.restlessness,
+        memory_pressure: cyberData.memory_pressure
+      });
     });
   }
 });
@@ -327,6 +348,14 @@ async function fetchInitialStatus() {
             state: cyberData.state?.toLowerCase() || 'unknown',
             premium: cyberData.premium || false,
             current_location: cyberData.current_location
+          });
+          // Seed biofeedback if available
+          agentManager.updateAgentBiofeedback(name, {
+            boredom: (cyberData as any).boredom,
+            tiredness: (cyberData as any).tiredness,
+            duty: (cyberData as any).duty,
+            restlessness: (cyberData as any).restlessness,
+            memory_pressure: (cyberData as any).memory_pressure
           });
           
           // Fetch initial reflection for each cyber

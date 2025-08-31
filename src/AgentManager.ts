@@ -12,6 +12,13 @@ interface AgentData {
   state: string;
   premium: boolean;
   currentLocation?: string;
+  bio?: {
+    boredom?: number;
+    tiredness?: number;
+    duty?: number;
+    restlessness?: number;
+    memory_pressure?: number;
+  };
   mesh: THREE.Group;
   position: THREE.Vector3;
   targetPosition: THREE.Vector3;
@@ -396,6 +403,22 @@ export class AgentManager {
     return Array.from(this.agents.keys());
   }
 
+  getAgentBio(name: string): AgentData['bio'] | null {
+    const a = this.agents.get(name);
+    return a?.bio || null;
+  }
+
+  updateAgentBiofeedback(name: string, bio: Partial<NonNullable<AgentData['bio']>>) {
+    const agent = this.agents.get(name);
+    if (!agent) return;
+    agent.bio = { ...(agent.bio || {}), ...bio };
+    // If a bubble is visible, refresh it with current thought + stats
+    if (agent.thoughtBubble) {
+      const bubbleText = this.composeBubbleText(agent);
+      agent.thoughtBubble.updateText(bubbleText);
+    }
+  }
+
   showThought(agentName: string, thought: string) {
     const agent = this.agents.get(agentName);
     if (!agent) return;
@@ -409,18 +432,31 @@ export class AgentManager {
       agent.thoughtHistory.pop();
     }
     
+    const bubbleText = this.composeBubbleText(agent, thought);
+
     if (agent.thoughtBubble) {
       // Update existing bubble
-      agent.thoughtBubble.updateText(thought);
+      agent.thoughtBubble.updateText(bubbleText);
       agent.thoughtBubble.updatePosition(agent.mesh.position);
     } else {
       // Create new bubble
-      agent.thoughtBubble = new ThoughtBubble(thought, agent.mesh.position);
+      agent.thoughtBubble = new ThoughtBubble(bubbleText, agent.mesh.position);
       this.scene.add(agent.thoughtBubble.getMesh());
     }
     
     // Also pulse the agent to show activity
     this.pulseAgent(agent);
+  }
+
+  private composeBubbleText(agent: AgentData, newThought?: string): string {
+    const latestThought = newThought ?? agent.thoughtHistory[0]?.thought ?? '';
+    const b = agent.bio || {};
+    const fmt = (n?: number) => (typeof n === 'number' ? Math.round(Math.max(0, Math.min(100, n))) : 0);
+    const stats = `B${fmt(b.boredom)} T${fmt(b.tiredness)} D${fmt(b.duty)}\nR${fmt(b.restlessness)} M${fmt(b.memory_pressure)}`;
+    if (latestThought) {
+      return `${latestThought}\n${stats}`;
+    }
+    return stats;
   }
   
   getAgentThoughtHistory(agentName: string): ThoughtHistoryEntry[] {

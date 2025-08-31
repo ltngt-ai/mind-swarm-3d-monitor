@@ -451,6 +451,7 @@ export class AutomaticMode extends Mode {
         <span style="display: inline-block; animation: pulse 2s infinite;">🔴</span> LIVE STREAM
       </h3>
       <div id="current-shot" style="font-weight: bold; color: #00ff88; font-size: 22px;">Following: …</div>
+      <div id="bf-line" style="margin-top: 6px; font-size: 16px; color: #aee;"></div>
       <style>
         @keyframes pulse {
           0% { opacity: 1; }
@@ -500,6 +501,15 @@ export class AutomaticMode extends Mode {
     if (shotEl) {
       const name = shot.target || 'Cyber';
       (shotEl as HTMLElement).textContent = `Following: ${name}`;
+    }
+    const bfEl = this.streamOverlay.querySelector('#bf-line');
+    if (bfEl) {
+      const name = shot.target || '';
+      const bf = name ? this.context.agentManager.getAgentBio(name) : null;
+      const fmt = (n?: number) => (typeof n === 'number' ? Math.round(Math.max(0, Math.min(100, n))) : 0);
+      (bfEl as HTMLElement).textContent = bf
+        ? `B${fmt(bf.boredom)} T${fmt(bf.tiredness)} D${fmt(bf.duty)} R${fmt(bf.restlessness)} M${fmt(bf.memory_pressure)}`
+        : '';
     }
   }
   
