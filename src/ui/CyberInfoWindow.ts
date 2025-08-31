@@ -27,7 +27,7 @@ export class CyberInfoWindow {
   private selectedCyber: string | null = null;
   private currentCycle: number = 0;  // Will be set when we get actual data
   private selectedCycle: number = 999;  // Start high to indicate not yet set
-  private selectedStage: string = 'observation';
+  private selectedStage: string = 'reflection';
   private cycleData: Map<number, CycleData> = new Map();
   
   private isDragging = false;
@@ -54,13 +54,13 @@ export class CyberInfoWindow {
       position: fixed;
       right: 20px;
       top: 80px;
-      width: 520px;
-      height: 650px;
+      width: 676px;
+      height: 642px;
       background: rgba(0, 20, 40, 0.98);
       border: 1px solid #0080ff;
       border-radius: 12px;
       font-family: 'Courier New', monospace;
-      font-size: 16px;
+      font-size: 18px;
       color: #00ffff;
       z-index: 1000;
       display: none;
@@ -76,6 +76,37 @@ export class CyberInfoWindow {
     
     // Listen for WebSocket events
     this.setupEventListeners();
+  }
+
+  // Dock the window to a screen corner with default offsets
+  public setDock(position: 'bottom-left' | 'top-right') {
+    if (position === 'bottom-left') {
+      this.container.style.left = '20px';
+      this.container.style.bottom = '0px';
+      this.container.style.right = 'auto';
+      this.container.style.top = 'auto';
+    } else {
+      this.container.style.right = '20px';
+      this.container.style.top = '80px';
+      this.container.style.left = 'auto';
+      this.container.style.bottom = 'auto';
+    }
+  }
+
+  // Show/hide the Follow button (used by Automatic mode)
+  public setFollowButtonVisible(visible: boolean) {
+    const btnFollow = this.container.querySelector('#btn-follow') as HTMLButtonElement | null;
+    if (btnFollow) {
+      btnFollow.style.display = visible ? '' : 'none';
+    }
+  }
+
+  // Show/hide the entire action bar (Follow/Message/Refresh)
+  public setActionBarVisible(visible: boolean) {
+    const actionBar = this.container.querySelector('.action-buttons') as HTMLElement | null;
+    if (actionBar) {
+      actionBar.style.display = visible ? 'flex' : 'none';
+    }
   }
   
   private setupWindow() {
@@ -221,14 +252,14 @@ export class CyberInfoWindow {
         flex-wrap: wrap;
         border-bottom: 1px solid #0080ff;
       ">
-        <button class="stage-btn active" data-stage="observation" style="
-          background: rgba(0, 255, 255, 0.3);
-          border: 1px solid #00ffff;
-          color: #00ffff;
+        <button class="stage-btn" data-stage="observation" style="
+          background: rgba(0, 128, 255, 0.2);
+          border: 1px solid #0080ff;
+          color: #0080ff;
           padding: 5px 10px;
           border-radius: 4px;
           cursor: pointer;
-          font-size: 14px;
+          font-size: 16px;
         ">Observation</button>
         <button class="stage-btn" data-stage="decision" style="
           background: rgba(0, 128, 255, 0.2);
@@ -237,7 +268,7 @@ export class CyberInfoWindow {
           padding: 5px 10px;
           border-radius: 4px;
           cursor: pointer;
-          font-size: 14px;
+          font-size: 16px;
         ">Decision</button>
         <button class="stage-btn" data-stage="execution" style="
           background: rgba(0, 128, 255, 0.2);
@@ -246,26 +277,17 @@ export class CyberInfoWindow {
           padding: 5px 10px;
           border-radius: 4px;
           cursor: pointer;
-          font-size: 14px;
+          font-size: 16px;
         ">Execution</button>
-        <button class="stage-btn" data-stage="reflection" style="
-          background: rgba(0, 128, 255, 0.2);
-          border: 1px solid #0080ff;
-          color: #0080ff;
+        <button class="stage-btn active" data-stage="reflection" style="
+          background: rgba(0, 255, 255, 0.3);
+          border: 1px solid #00ffff;
+          color: #00ffff;
           padding: 5px 10px;
           border-radius: 4px;
           cursor: pointer;
-          font-size: 14px;
+          font-size: 16px;
         ">Reflection</button>
-        <button class="stage-btn" data-stage="cleanup" style="
-          background: rgba(0, 128, 255, 0.2);
-          border: 1px solid #0080ff;
-          color: #0080ff;
-          padding: 5px 10px;
-          border-radius: 4px;
-          cursor: pointer;
-          font-size: 14px;
-        ">Cleanup</button>
       </div>
       
       <!-- Content Area -->
@@ -273,13 +295,11 @@ export class CyberInfoWindow {
         padding: 15px;
         flex: 1;
         overflow-y: auto;
-        font-size: 11px;
+        font-size: 14px;
         line-height: 1.4;
         min-height: 0;
       ">
-        <div style="color: #666; text-align: center; padding: 20px;">
-          Loading cyber data...
-        </div>
+        
       </div>
       
       <!-- Status Bar -->
@@ -287,7 +307,7 @@ export class CyberInfoWindow {
         padding: 5px 10px;
         background: rgba(0, 128, 255, 0.1);
         border-top: 1px solid #0080ff;
-        font-size: 13px;
+        font-size: 14px;
         color: #0080ff;
         display: flex;
         justify-content: space-between;
@@ -552,6 +572,16 @@ export class CyberInfoWindow {
             this.fetchCycleData(this.selectedCycle);
           }
         }
+
+        // If we are viewing Reflection, show the latest reflection text immediately to avoid stale content
+        if (this.selectedStage === 'reflection' && data.reflection) {
+          const contentEl = this.container.querySelector('#info-content') as HTMLElement | null;
+          if (contentEl) {
+            const text = typeof data.reflection === 'string' ? data.reflection : JSON.stringify(data.reflection);
+            contentEl.innerHTML = this.formatStageData(text);
+            this.updateStatus(`Showing reflection for cycle ${this.selectedCycle}`);
+          }
+        }
       }
     });
     
@@ -563,17 +593,8 @@ export class CyberInfoWindow {
         console.log(`Cycle started for ${data.cyber}: ${data.cycle_number}, Following: ${this.isFollowing}`);
         this.currentCycle = data.cycle_number;
         this.updateCycleStatus();
-        if (this.isFollowing) {
-          console.log(`Following mode active, jumping to cycle ${data.cycle_number}`);
-          this.selectedCycle = data.cycle_number;
-          this.fetchCycleData(this.selectedCycle, true);  // Force refresh to get latest data
-          
-          // Update the cycle input field
-          const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
-          if (cycleInput) {
-            cycleInput.value = this.selectedCycle.toString();
-          }
-        }
+        // In follow mode, do NOT switch to the new cycle immediately to avoid showing loading
+        // We'll switch on cycle_completed when data is ready
       }
     });
     
@@ -604,19 +625,32 @@ export class CyberInfoWindow {
     this.selectedCyber = cyberName;
     this.cycleData.clear();
     this.show();
+    // Clear previous agent's content immediately to avoid stale display
+    const contentEl = this.container.querySelector('#info-content') as HTMLElement | null;
+    if (contentEl) contentEl.innerHTML = '';
     
     // Update title
     const nameEl = this.container.querySelector('#cyber-name') as HTMLElement;
     nameEl.textContent = `Cyber: ${cyberName}`;
     
-    // Update status to show loading
-    this.updateStatus('Loading...');
+    // Default to Reflection stage view
+    this.selectStage('reflection');
+
+    // Update status to show we're tracking this cyber without spamming 'Loading'
+    this.updateStatus('Following cyber');
     
     // Use the fast endpoint to get just the current cycle number
     this.wsClient.send({
       type: 'get_current_cycle',
       cyber: cyberName,
       request_id: `current_cycle_${Date.now()}`
+    });
+
+    // Also request the latest reflection text immediately for quick display
+    this.wsClient.send({
+      type: 'get_current_reflection',
+      cyber: cyberName,
+      request_id: `current_reflection_${Date.now()}`
     });
   }
   
@@ -648,11 +682,9 @@ export class CyberInfoWindow {
     console.log(`Displaying stage ${this.selectedStage} for cycle ${this.selectedCycle}`, cycleData);
     
     if (!cycleData) {
-      contentEl.innerHTML = `
-        <div style="color: #666; text-align: center; padding: 20px;">
-          Loading cycle ${this.selectedCycle} data...
-        </div>
-      `;
+      // Do not replace content with a loading message; keep last shown content
+      // Especially when selectedCycle is the live cycle, avoid flicker
+      this.updateStatus(this.selectedCycle === this.currentCycle ? 'Awaiting latest cycle...' : 'Waiting for data...');
       return;
     }
     
@@ -672,19 +704,38 @@ export class CyberInfoWindow {
   }
   
   private formatStageData(data: any): string {
+    // Reflection: show only the cycle summary, no metadata/JSON dumps
+    if (this.selectedStage === 'reflection') {
+      let summary: any = null;
+      if (typeof data === 'string') {
+        summary = data;
+      } else if (data) {
+        summary = (data as any).cycle_summary
+          || (data.stage_output && ((data.stage_output as any).cycle_summary || (data.stage_output as any).summary))
+          || (data as any).summary
+          || null;
+      }
+      const text = typeof summary === 'string' ? summary : 'No summary available yet.';
+      return `<div class="stage-output" style="font-size: 28px; line-height: 1.6;">
+        <pre style="white-space: pre-wrap; word-wrap: break-word; line-height: 1.6;">${this.escapeHtml(text)}</pre>
+      </div>`;
+    }
+    
     if (typeof data === 'string') {
-      return `<pre style="white-space: pre-wrap; word-wrap: break-word; font-size: 14px; line-height: 1.4;">${this.escapeHtml(data)}</pre>`;
+      return `<div class="stage-output" style="font-size: 28px; line-height: 1.6;">
+        <pre style="white-space: pre-wrap; word-wrap: break-word; line-height: 1.6;">${this.escapeHtml(data)}</pre>
+      </div>`;
     }
     
     // Format different stage data types
-    let html = '<div>';
+    let html = '<div class="stage-output" style="font-size: 28px; line-height: 1.6;">';
     
     // Add stage name and timestamp if available
     if (data.stage) {
       html += `<h3 style="color: #00ff80; margin: 0 0 10px 0;">Stage: ${data.stage}</h3>`;
     }
     if (data.timestamp) {
-      html += `<div style="color: #888; font-size: 13px; margin-bottom: 10px;">Time: ${new Date(data.timestamp).toLocaleString()}</div>`;
+      html += `<div style="color: #888; font-size: 0.6em; margin-bottom: 10px;">Time: ${new Date(data.timestamp).toLocaleString()}</div>`;
     }
     
     // Special handling for execution stage with scripts
@@ -708,16 +759,16 @@ export class CyberInfoWindow {
         }
         if (result.output) {
           html += '<div style="margin-top: 5px;">Output:</div>';
-          html += `<pre style="color: #00ff80; margin-left: 10px; white-space: pre-wrap; word-wrap: break-word; font-size: 13px;">${this.escapeHtml(result.output)}</pre>`;
+          html += `<pre style="color: #00ff80; margin-left: 10px; white-space: pre-wrap; word-wrap: break-word;">${this.escapeHtml(result.output)}</pre>`;
         }
         if (result.execution_time) {
-          html += `<div style="color: #888; font-size: 12px;">Time: ${result.execution_time}</div>`;
+          html += `<div style="color: #888; font-size: 0.6em;">Time: ${result.execution_time}</div>`;
         }
         if (result.script_lines) {
-          html += `<div style="color: #888; font-size: 12px;">Script lines: ${result.script_lines}</div>`;
+          html += `<div style="color: #888; font-size: 0.6em;">Script lines: ${result.script_lines}</div>`;
         }
         if (result.attempt) {
-          html += `<div style="color: #888; font-size: 12px;">Attempt: ${result.attempt}</div>`;
+          html += `<div style="color: #888; font-size: 0.6em;">Attempt: ${result.attempt}</div>`;
         }
         html += '</div>';
       }
@@ -741,7 +792,7 @@ export class CyberInfoWindow {
     if (data.working_memory && this.selectedStage === 'observation') {
       html += '<h4 style="color: #00ffff; margin: 15px 0 10px 0;">Working Memory Summary:</h4>';
       const mem = data.working_memory;
-      html += `<div style="color: #00ff80; margin-left: 10px; font-size: 14px; line-height: 1.4;">`;
+      html += `<div style="color: #00ff80; margin-left: 10px; line-height: 1.6;">`;
       html += `<div>Max Tokens: ${mem.max_tokens || 'N/A'}</div>`;
       html += `<div>Current Task: ${mem.current_task_id || 'None'}</div>`;
       html += `<div>Memory Items: ${mem.memories ? mem.memories.length : 0}</div>`;
@@ -768,7 +819,7 @@ export class CyberInfoWindow {
     }
     
     if (data.duration_ms) {
-      html += `<div style="color: #888; margin-top: 10px; font-size: 13px;">Duration: ${data.duration_ms}ms</div>`;
+      html += `<div style="color: #888; margin-top: 10px; font-size: 0.6em;">Duration: ${data.duration_ms}ms</div>`;
     }
     
     html += '</div>';
@@ -782,7 +833,7 @@ export class CyberInfoWindow {
           (value.endsWith('}') || value.endsWith(']'))) {
         try {
           const parsed = JSON.parse(value);
-          return `<pre style="color: #00ff80; margin-left: 10px; white-space: pre-wrap; word-wrap: break-word; font-size: 14px; line-height: 1.4;">${this.escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`;
+          return `<pre style="color: #00ff80; margin-left: 10px; white-space: pre-wrap; word-wrap: break-word; line-height: 1.6;">${this.escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`;
         } catch {
           // Not valid JSON, treat as regular string
         }
@@ -790,18 +841,18 @@ export class CyberInfoWindow {
       
       // For multiline strings, use pre tag to preserve formatting
       if (value.includes('\n')) {
-        return `<pre style="color: #00ff80; margin-left: 10px; white-space: pre-wrap; word-wrap: break-word; font-size: 14px; line-height: 1.4;">${this.escapeHtml(value)}</pre>`;
+        return `<pre style="color: #00ff80; margin-left: 10px; white-space: pre-wrap; word-wrap: break-word; line-height: 1.6;">${this.escapeHtml(value)}</pre>`;
       }
       
       // Single line string
-      return `<div style="color: #00ff80; margin-left: 10px; font-size: 14px; line-height: 1.4;">${this.escapeHtml(value)}</div>`;
+      return `<div style="color: #00ff80; margin-left: 10px; line-height: 1.6;">${this.escapeHtml(value)}</div>`;
     }
     
     if (typeof value === 'object' && value !== null) {
-      return `<pre style="color: #00ff80; margin-left: 10px; white-space: pre-wrap; word-wrap: break-word; font-size: 14px; line-height: 1.4;">${this.escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+      return `<pre style="color: #00ff80; margin-left: 10px; white-space: pre-wrap; word-wrap: break-word; line-height: 1.6;">${this.escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
     }
     
-    return `<div style="color: #00ff80; margin-left: 10px; font-size: 14px; line-height: 1.4;">${value}</div>`;
+    return `<div style="color: #00ff80; margin-left: 10px; line-height: 1.6;">${value}</div>`;
   }
   
   private formatPythonScript(script: string): string {
@@ -868,7 +919,7 @@ export class CyberInfoWindow {
     });
     
     // Return the pre-formatted block with proper HTML (not escaped)
-    return `<pre style="background: rgba(0, 0, 0, 0.3); padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 13px; line-height: 1.5; font-family: 'Courier New', monospace;">${highlightedLines.join('\n')}</pre>`;
+    return `<pre style="background: rgba(0, 0, 0, 0.3); padding: 10px; border-radius: 4px; overflow-x: auto; line-height: 1.5; font-family: 'Courier New', monospace;">${highlightedLines.join('\n')}</pre>`;
   }
   
   private escapeHtml(text: string): string {
@@ -954,7 +1005,8 @@ export class CyberInfoWindow {
     console.log('Requesting cycle data:', request);
     this.wsClient.send(request);
     
-    this.updateStatus(`Loading cycle ${cycleNumber}...`);
+    // Avoid heavy-handed 'Loading...' messaging; keep subtle
+    this.updateStatus(`Fetching cycle ${cycleNumber}…`);
   }
   
   private toggleFollow() {
@@ -1003,18 +1055,23 @@ export class CyberInfoWindow {
     // Apply zoom to content
     const content = this.container.querySelector('#info-content') as HTMLElement;
     if (content) {
-      content.style.fontSize = `${11 * this.textZoom}px`;
+      content.style.fontSize = `${14 * this.textZoom}px`;
     }
+    // Scale stage output to be 2x content size
+    const stageOutputs = this.container.querySelectorAll('.stage-output') as NodeListOf<HTMLElement>;
+    stageOutputs.forEach(el => {
+      el.style.fontSize = `${28 * this.textZoom}px`;
+    });
     
     // Apply zoom to other text elements
     const statusBar = this.container.querySelector('.status-bar') as HTMLElement;
     if (statusBar) {
-      statusBar.style.fontSize = `${10 * this.textZoom}px`;
+      statusBar.style.fontSize = `${14 * this.textZoom}px`;
     }
     
     const stageButtons = this.container.querySelectorAll('.stage-btn') as NodeListOf<HTMLElement>;
     stageButtons.forEach(btn => {
-      btn.style.fontSize = `${11 * this.textZoom}px`;
+      btn.style.fontSize = `${16 * this.textZoom}px`;
     });
   }
   

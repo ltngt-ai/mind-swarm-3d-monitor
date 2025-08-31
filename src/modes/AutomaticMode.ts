@@ -15,8 +15,10 @@ export class AutomaticMode extends Mode {
   private currentShot: CameraShot | null = null;
   private shotQueue: CameraShot[] = [];
   private lastShotChange: number = Date.now();
-  private minShotDuration: number = 5000; // 5 seconds minimum
-  private maxShotDuration: number = 15000; // 15 seconds maximum
+  private minShotDuration: number = 60000; // 60 seconds minimum
+  private maxShotDuration: number = 120000; // 120 seconds maximum
+  // Round-robin index for simple cycling between cybers
+  private roundRobinIndex: number = -1;
   
   // Activity tracking
   private cyberActivity: Map<string, number> = new Map();
@@ -30,6 +32,8 @@ export class AutomaticMode extends Mode {
   // UI elements
   private streamOverlay?: HTMLDivElement;
   private activityFeed?: HTMLDivElement;
+  // Safety: force a camera switch at this interval even if a long shot was queued
+  private forceSwitchInterval: number = 90000; // 90 seconds hard cap
 
   constructor(context: ModeContext) {
     super('Automatic', context);
@@ -43,16 +47,22 @@ export class AutomaticMode extends Mode {
     
     // Add GUI controls
     if (this.guiFolder) {
-      this.guiFolder.add({ minDuration: this.minShotDuration / 1000 }, 'minDuration', 3, 30)
+      this.guiFolder.add({ minDuration: this.minShotDuration / 1000 }, 'minDuration', 30, 180)
         .name('Min Shot Duration (s)')
         .onChange((value: number) => {
           this.minShotDuration = value * 1000;
         });
         
-      this.guiFolder.add({ maxDuration: this.maxShotDuration / 1000 }, 'maxDuration', 5, 60)
+      this.guiFolder.add({ maxDuration: this.maxShotDuration / 1000 }, 'maxDuration', 60, 360)
         .name('Max Shot Duration (s)')
         .onChange((value: number) => {
           this.maxShotDuration = value * 1000;
+        });
+      // Safety cap for long shots
+      this.guiFolder.add({ hardCap: this.forceSwitchInterval / 1000 }, 'hardCap', 30, 240)
+        .name('Hard Cap (s)')
+        .onChange((value: number) => {
+          this.forceSwitchInterval = Math.max(30000, value * 1000);
         });
         
       this.guiFolder.add({ switchNow: () => this.switchShot() }, 'switchNow')
@@ -85,7 +95,13 @@ export class AutomaticMode extends Mode {
     // Start with a cyber-focus shot if available
     const firstTarget = this.pickTargetCyber();
     if (firstTarget) {
-      this.queueShot({ type: 'cyber-focus', duration: 8000, target: firstTarget });
+      this.queueShot({ type: 'cyber-focus', duration: this.minShotDuration, target: firstTarget });
+      if (this.context.cyberInfoWindow) {
+        this.context.cyberInfoWindow.setDock('bottom-left');
+        this.context.cyberInfoWindow.selectCyber(firstTarget);
+        this.context.cyberInfoWindow.setFollowButtonVisible(false);
+        this.context.cyberInfoWindow.setActionBarVisible(false);
+      }
     }
     
     // Execute the first shot immediately
@@ -110,6 +126,11 @@ export class AutomaticMode extends Mode {
     // Hide streaming UI
     if (this.streamOverlay) this.streamOverlay.style.display = 'none';
     if (this.activityFeed) this.activityFeed.style.display = 'none';
+    if (this.context.cyberInfoWindow) {
+      this.context.cyberInfoWindow.hide();
+      this.context.cyberInfoWindow.setFollowButtonVisible(true);
+      this.context.cyberInfoWindow.setActionBarVisible(true);
+    }
     
     // Clear shot queue
     this.shotQueue = [];
@@ -128,8 +149,12 @@ export class AutomaticMode extends Mode {
       }
     }
     
-    // Check if it's time to switch shots
+    // Check if it's time to switch shots (natural duration)
     if (this.currentShot && now - this.lastShotChange > this.currentShot.duration) {
+      this.switchShot();
+    }
+    // Safety: force switch if we've exceeded the hard cap
+    if (this.currentShot && now - this.lastShotChange > this.forceSwitchInterval) {
       this.switchShot();
     }
     
@@ -220,7 +245,7 @@ export class AutomaticMode extends Mode {
     if (target) {
       this.queueShot({
         type: 'cyber-focus',
-        duration: this.minShotDuration + Math.random() * 5000,
+        duration: this.minShotDuration + Math.random() * (this.maxShotDuration - this.minShotDuration),
         target
       });
     }
@@ -256,7 +281,17 @@ export class AutomaticMode extends Mode {
   private executeShot(shot: CameraShot): void {
     if (shot.type === 'cyber-focus') {
       const target = shot.target || this.pickTargetCyber();
-      if (target) this.executeCyberFocusShot(target);
+      if (target) {
+        // Record actual target so UI shows the correct name
+        shot.target = target;
+        if (this.currentShot) this.currentShot.target = target;
+        if (this.context.cyberInfoWindow) {
+          this.context.cyberInfoWindow.setDock('bottom-left');
+          this.context.cyberInfoWindow.selectCyber(target);
+          this.context.cyberInfoWindow.setActionBarVisible(false);
+        }
+        this.executeCyberFocusShot(target);
+      }
     }
   }
 
@@ -357,21 +392,9 @@ export class AutomaticMode extends Mode {
   }
 
   private onCyberActivity(data: any): void {
-    const activity = this.cyberActivity.get(data.cyber) || 0;
-    this.cyberActivity.set(data.cyber, activity + 1);
-    // If not currently following a specific cyber, pivot to this one
-    if (!this.currentShot || !this.currentShot.target) {
-      this.queueShot({ type: 'cyber-focus', duration: this.minShotDuration, target: data.cyber });
-      if (!this.currentShot) {
-        this.switchShot();
-      }
-    }
-    
-    // Decay activity over time
-    setTimeout(() => {
-      const current = this.cyberActivity.get(data.cyber) || 0;
-      this.cyberActivity.set(data.cyber, Math.max(0, current - 1));
-    }, 10000);
+    // In round-robin mode, we don't bias toward a specific cyber.
+    // Still log activity and keep the feed updated for UX.
+    this.addActivityEvent('activity', data.cyber);
   }
 
   private onAgentThinking(data: any): void {
@@ -388,24 +411,8 @@ export class AutomaticMode extends Mode {
   }
 
   private onBiofeedback(data: any): void {
-    // Weight camera interest using backend biofeedback metrics (0-100)
-    const boredom = clamp0to100(data.boredom);
-    const tired = clamp0to100(data.tiredness);
-    const duty = clamp0to100(data.duty);
-    const restless = clamp0to100(data.restlessness);
-    const mem = clamp0to100(data.memory_pressure);
-
-    // Heuristic: prefer high restlessness (movement), decent duty, lower boredom; slightly avoid very tired
-    const score = (restless * 0.6) + (duty * 0.25) + ((100 - boredom) * 0.25) + (mem * 0.1) - (tired * 0.2);
-    const boost = Math.max(0, score / 25); // normalize to a small additive boost
-    const current = this.cyberActivity.get(data.cyber) || 0;
-    this.cyberActivity.set(data.cyber, current + boost);
+    // Round-robin mode ignores biofeedback for selection, but still display metrics.
     this.addActivityEvent('bio', data.cyber);
-    // If idle or unfocused, pivot to this cyber quickly
-    if (!this.currentShot || !this.currentShot.target) {
-      this.queueShot({ type: 'cyber-focus', duration: this.minShotDuration, target: data.cyber });
-      if (!this.currentShot) this.switchShot();
-    }
   }
 
   private addActivityEvent(type: string, cyber?: string): void {
@@ -432,7 +439,7 @@ export class AutomaticMode extends Mode {
     this.streamOverlay.id = 'stream-overlay';
     this.streamOverlay.style.cssText = `
       position: fixed;
-      top: 40px;
+      top: 16px;
       left: 24px;
       background: rgba(0, 20, 40, 0.8);
       border: 1px solid #00ffff;
@@ -525,7 +532,14 @@ export class AutomaticMode extends Mode {
     const shotEl = this.streamOverlay.querySelector('#current-shot');
     if (shotEl) {
       const name = shot.target || 'Cyber';
-      (shotEl as HTMLElement).textContent = `Following: ${name}`;
+      const names = this.context.agentManager.getAgentNames();
+      const total = names.length;
+      let counter = '';
+      if (name && total > 0) {
+        const idx = names.indexOf(name);
+        if (idx !== -1) counter = ` (${idx + 1}/${total})`;
+      }
+      (shotEl as HTMLElement).textContent = `Following: ${name}${counter}`;
     }
     const name = shot.target || '';
     const bf = name ? this.context.agentManager.getAgentBio(name) : null;
@@ -601,16 +615,11 @@ export class AutomaticMode extends Mode {
   // updateStatsPanel removed for simplified UI
 
   private pickTargetCyber(): string | null {
-    // Prefer most active cyber first
-    let best: string | null = null;
-    let max = -1;
-    for (const [cyber, score] of this.cyberActivity) {
-      if (score > max) { max = score; best = cyber; }
-    }
-    if (best) return best;
-    // Fallback to first known agent
+    // Simple round-robin cycle through all known cybers
     const names = this.context.agentManager.getAgentNames();
-    return names.length > 0 ? names[0] : null;
+    if (names.length === 0) return null;
+    this.roundRobinIndex = (this.roundRobinIndex + 1) % names.length;
+    return names[this.roundRobinIndex];
   }
 }
 

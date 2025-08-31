@@ -26,7 +26,7 @@ interface AgentData {
   namePlate: THREE.Sprite;
   thoughtBubble?: ThoughtBubble;
   thoughtHistory: ThoughtHistoryEntry[];
-  connectionLine?: THREE.Line;
+  connectionLine?: THREE.Object3D;
 }
 
 export class AgentManager {
@@ -178,10 +178,32 @@ export class AgentManager {
     // Remove connection line for non-located agents
     if (agent.connectionLine) {
       this.scene.remove(agent.connectionLine);
-      agent.connectionLine.geometry.dispose();
-      (agent.connectionLine.material as THREE.Material).dispose();
+      // Safely dispose any meshes within the connection object
+      (agent.connectionLine as THREE.Object3D).traverse(obj => {
+        const mesh = obj as unknown as THREE.Mesh;
+        if (mesh && mesh.geometry) {
+          (mesh.geometry as THREE.BufferGeometry).dispose?.();
+        }
+        const mat: any = (mesh as any).material;
+        if (mat) {
+          if (Array.isArray(mat)) mat.forEach(m => m.dispose?.());
+          else mat.dispose?.();
+        }
+      });
       agent.connectionLine = undefined;
     }
+  }
+
+  // Smoothly orbit agents without a filesystem location on a default circle
+  private updateDefaultCircleOrbit(agent: AgentData, index: number, totalCount: number) {
+    const radius = Math.max(20, totalCount * 5);
+    const baseAngle = (index / Math.max(1, totalCount)) * Math.PI * 2;
+    const angle = baseAngle + this.orbitTime * 0.3; // rotate slowly
+    agent.targetPosition.set(
+      Math.cos(angle) * radius,
+      3,
+      Math.sin(angle) * radius
+    );
   }
   
   // Get 3D position for a filesystem path
@@ -195,29 +217,86 @@ export class AgentManager {
   
   // Update connection line between agent and its current location
   private updateConnectionLine(agent: AgentData, locationPosition: THREE.Vector3) {
-    // Remove existing line if any
-    if (agent.connectionLine) {
-      this.scene.remove(agent.connectionLine);
-      agent.connectionLine.geometry.dispose();
-      (agent.connectionLine.material as THREE.Material).dispose();
+    const start = new THREE.Vector3(locationPosition.x, locationPosition.y + 5, locationPosition.z);
+    const end = new THREE.Vector3(agent.targetPosition.x, agent.targetPosition.y, agent.targetPosition.z);
+    const color = this.getAgentColor(agent.state);
+
+    if (!agent.connectionLine) {
+      const group = new THREE.Group();
+      // Core tube
+      const coreRadius = 0.28;
+      const coreGeom = new THREE.CylinderGeometry(coreRadius, coreRadius, 1, 4, 1, true);
+      const coreMat = new THREE.MeshStandardMaterial({
+        color,
+        emissive: new THREE.Color(color),
+        emissiveIntensity: 1.9,
+        transparent: true,
+        opacity: 0.95
+      });
+      const core = new THREE.Mesh(coreGeom, coreMat);
+      // Halo tube (additive fresnel)
+      const haloRadius = coreRadius * 1.4;
+      const haloGeom = new THREE.CylinderGeometry(haloRadius, haloRadius, 1, 4, 1, true);
+      const haloMat = new THREE.ShaderMaterial({
+        uniforms: {
+          uColor: { value: new THREE.Color(color) },
+          uIntensity: { value: 1.3 }
+        },
+        vertexShader: `
+          varying vec3 vWorldPos;
+          varying vec3 vWorldNormal;
+          void main() {
+            vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+            vWorldNormal = normalize(mat3(modelMatrix) * normal);
+            gl_Position = projectionMatrix * viewMatrix * vec4(vWorldPos, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 uColor;
+          uniform float uIntensity;
+          varying vec3 vWorldPos;
+          varying vec3 vWorldNormal;
+          void main() {
+            vec3 V = normalize(cameraPosition - vWorldPos);
+            float fres = pow(1.0 - max(dot(normalize(vWorldNormal), V), 0.0), 2.0);
+            vec3 col = uColor * (0.8 + 1.4 * fres) * uIntensity;
+            float alpha = clamp(fres * 0.8, 0.0, 0.85);
+            gl_FragColor = vec4(col, alpha);
+          }
+        `,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+      const halo = new THREE.Mesh(haloGeom, haloMat);
+
+      group.add(core);
+      group.add(halo);
+      this.scene.add(group);
+      agent.connectionLine = group;
+    } else {
+      // Update colors on existing materials
+      (agent.connectionLine as THREE.Object3D).traverse(obj => {
+        const anyMat = (obj as any).material as any;
+        if (!anyMat) return;
+        if (anyMat.color) anyMat.color.setHex(color);
+        if (anyMat.emissive) anyMat.emissive.setHex(color);
+        if (typeof anyMat.emissiveIntensity === 'number') anyMat.emissiveIntensity = 1.9;
+        if (anyMat.uniforms && anyMat.uniforms.uColor) anyMat.uniforms.uColor.value.setHex(color);
+      });
     }
-    
-    // Create new connection line
-    const points = [
-      new THREE.Vector3(locationPosition.x, locationPosition.y + 5, locationPosition.z),
-      new THREE.Vector3(agent.targetPosition.x, agent.targetPosition.y, agent.targetPosition.z)
-    ];
-    
-    const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    const material = new THREE.LineBasicMaterial({
-      color: this.getAgentColor(agent.state),
-      transparent: true,
-      opacity: 0.6,
-      linewidth: 2
-    });
-    
-    agent.connectionLine = new THREE.Line(geometry, material);
-    this.scene.add(agent.connectionLine);
+
+    // Position group between start and end
+    const obj = agent.connectionLine as THREE.Object3D;
+    const dir = new THREE.Vector3().subVectors(end, start);
+    const length = dir.length();
+    if (length > 0.0001) {
+      const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+      obj.position.copy(mid);
+      const yAxis = new THREE.Vector3(0, 1, 0);
+      obj.quaternion.setFromUnitVectors(yAxis, dir.clone().normalize());
+      obj.scale.set(1, length, 1);
+    }
   }
 
   removeAgent(name: string) {
@@ -234,8 +313,17 @@ export class AgentManager {
       // Remove connection line if exists
       if (agent.connectionLine) {
         this.scene.remove(agent.connectionLine);
-        agent.connectionLine.geometry.dispose();
-        (agent.connectionLine.material as THREE.Material).dispose();
+        (agent.connectionLine as THREE.Object3D).traverse(obj => {
+          const mesh = obj as unknown as THREE.Mesh;
+          if (mesh && mesh.geometry) {
+            (mesh.geometry as THREE.BufferGeometry).dispose?.();
+          }
+          const mat: any = (mesh as any).material;
+          if (mat) {
+            if (Array.isArray(mat)) mat.forEach(m => m.dispose?.());
+            else mat.dispose?.();
+          }
+        });
       }
       
       this.agents.delete(name);
@@ -259,7 +347,10 @@ export class AgentManager {
       
       // Update connection line color if it exists
       if (agent.connectionLine) {
-        (agent.connectionLine.material as THREE.LineBasicMaterial).color.setHex(color);
+        const anyMat = (agent.connectionLine as any).material as any;
+        if (anyMat && anyMat.color && typeof anyMat.color.setHex === 'function') anyMat.color.setHex(color);
+        if (anyMat && anyMat.emissive && typeof anyMat.emissive.setHex === 'function') anyMat.emissive.setHex(color);
+        if (anyMat && typeof anyMat.emissiveIntensity === 'number') anyMat.emissiveIntensity = 1.5;
       }
       
       // Add a pulse effect for state changes
@@ -286,13 +377,41 @@ export class AgentManager {
           
           // Highlight the tower at this location
           this.filesystemVisualizer.highlightTower(location);
+        } else {
+          // Unknown location -> treat as no location (default circle orbit)
+          agent.currentLocation = undefined;
+          if (agent.connectionLine) {
+            this.scene.remove(agent.connectionLine);
+            (agent.connectionLine as THREE.Object3D).traverse(obj => {
+              const mesh = obj as unknown as THREE.Mesh;
+              if (mesh && mesh.geometry) {
+                (mesh.geometry as THREE.BufferGeometry).dispose?.();
+              }
+              const mat: any = (mesh as any).material;
+              if (mat) {
+                if (Array.isArray(mat)) mat.forEach(m => m.dispose?.());
+                else mat.dispose?.();
+              }
+            });
+            agent.connectionLine = undefined;
+          }
+          this.updateAgentPositions();
         }
       } else {
         // Remove connection line if no location
         if (agent.connectionLine) {
           this.scene.remove(agent.connectionLine);
-          agent.connectionLine.geometry.dispose();
-          (agent.connectionLine.material as THREE.Material).dispose();
+          (agent.connectionLine as THREE.Object3D).traverse(obj => {
+            const mesh = obj as unknown as THREE.Mesh;
+            if (mesh && mesh.geometry) {
+              (mesh.geometry as THREE.BufferGeometry).dispose?.();
+            }
+            const mat: any = (mesh as any).material;
+            if (mat) {
+              if (Array.isArray(mat)) mat.forEach(m => m.dispose?.());
+              else mat.dispose?.();
+            }
+          });
           agent.connectionLine = undefined;
         }
         
@@ -530,15 +649,23 @@ export class AgentManager {
     const deltaTime = this.clock.getDelta();
     this.orbitTime += deltaTime; // Increment orbit time
     
-    // Update orbit positions for agents at locations
-    for (const agent of this.agents.values()) {
+    // Update orbit positions for agents
+    const agentList = Array.from(this.agents.values());
+    const total = agentList.length || 1;
+    agentList.forEach((agent, idx) => {
       // If agent has a location, continuously update its orbit position
       if (agent.currentLocation && this.filesystemVisualizer) {
         const locationPosition = this.getFilesystemLocationPosition(agent.currentLocation);
         if (locationPosition) {
           const orbitPosition = this.calculateOrbitPosition(agent.currentLocation, agent.name, locationPosition);
           agent.targetPosition.copy(orbitPosition);
+        } else {
+          // Fallback if tower not found for claimed location
+          this.updateDefaultCircleOrbit(agent, idx, total);
         }
+      } else {
+        // Default circular orbit for agents without a known location
+        this.updateDefaultCircleOrbit(agent, idx, total);
       }
       
       // Smooth movement to target position
@@ -563,12 +690,18 @@ export class AgentManager {
       if (agent.connectionLine && agent.currentLocation && this.filesystemVisualizer) {
         const locationPosition = this.getFilesystemLocationPosition(agent.currentLocation);
         if (locationPosition) {
-          // Update the line geometry to follow the agent's current position
-          const points = [
-            new THREE.Vector3(locationPosition.x, locationPosition.y + 5, locationPosition.z),
-            new THREE.Vector3(agent.mesh.position.x, agent.mesh.position.y, agent.mesh.position.z)
-          ];
-          agent.connectionLine.geometry.setFromPoints(points);
+          const start = new THREE.Vector3(locationPosition.x, locationPosition.y + 5, locationPosition.z);
+          const end = new THREE.Vector3(agent.mesh.position.x, agent.mesh.position.y, agent.mesh.position.z);
+          const obj = agent.connectionLine as THREE.Object3D;
+          const dir = new THREE.Vector3().subVectors(end, start);
+          const length = dir.length();
+          if (length > 0.0001) {
+            const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+            obj.position.copy(mid);
+            const yAxis = new THREE.Vector3(0, 1, 0);
+            obj.quaternion.setFromUnitVectors(yAxis, dir.clone().normalize());
+            obj.scale.set(1, length, 1);
+          }
         }
       }
       
@@ -576,6 +709,6 @@ export class AgentManager {
       if (agent.thoughtBubble) {
         agent.thoughtBubble.updatePosition(agent.mesh.position);
       }
-    }
+    });
   }
 }

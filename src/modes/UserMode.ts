@@ -230,6 +230,12 @@ export class UserMode extends Mode {
         this.context.cameraController.setMode(CameraMode.FOLLOW);
         this.context.cameraController.setTarget(agent.mesh);
         this.showNotification(`Following ${this.selectedCyber}`, 'info');
+        // Dock info window bottom-left and select the cyber
+        if (this.context.cyberInfoWindow) {
+          this.context.cyberInfoWindow.setDock('bottom-left');
+          this.context.cyberInfoWindow.selectCyber(this.selectedCyber);
+          this.context.cyberInfoWindow.show();
+        }
       }
     } else {
       // Stop following
@@ -282,6 +288,9 @@ export class UserMode extends Mode {
     this.selectedCyber = null;
     this.setFollowMode(false);
     this.updateCyberInfo();
+    if (this.context.cyberInfoWindow) {
+      this.context.cyberInfoWindow.hide();
+    }
   }
 
   // Mailbox methods removed - using CyberInfoWindow instead

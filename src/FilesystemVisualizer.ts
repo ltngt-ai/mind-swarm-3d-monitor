@@ -23,6 +23,14 @@ export class FilesystemVisualizer {
   private updateInterval: NodeJS.Timeout | null = null;
   private apiUrl: string = config.apiUrl;
   
+  // Instanced link meshes (filesystem tower connections)
+  private linkCoreInst?: THREE.InstancedMesh;
+  private linkHaloInst?: THREE.InstancedMesh;
+  private linkCapacity: number = 0;
+  private linkCount: number = 0;
+  private linkDummy: THREE.Object3D = new THREE.Object3D();
+  private useInstancing: boolean = false; // fallback to per-link meshes if false
+  
   // Color scheme for different directory types
   private directoryColors: DirectoryColors = {
     'grid': { primary: 0x00ffff, height: 35, emissive: 0x003333 },
@@ -44,6 +52,7 @@ export class FilesystemVisualizer {
     this.towerGeometry = new THREE.BoxGeometry(4, 1, 4);
     this.subTowerGeometry = new THREE.BoxGeometry(2, 1, 2);
     this.fileGeometry = new THREE.SphereGeometry(0.5, 8, 6);
+    this.linkDummy.matrixAutoUpdate = false;
     
     // Start with "NOT CONNECTED" indicator
     this.showNotConnected();
@@ -146,6 +155,8 @@ export class FilesystemVisualizer {
     
     // Clear existing towers
     this.clearTowers();
+    // Reset link instance count
+    this.linkCount = 0;
     
     // Create grid directory structure (main visualization)
     if (this.filesystemStructure.grid) {
@@ -167,6 +178,16 @@ export class FilesystemVisualizer {
         const towerName = cyberHome.name.replace('-home', ''); // Clean up display name
         this.createCyberHomeTower(cyberHome, cyberPositions[index], towerName);
       });
+    }
+
+    // Finalize instanced links
+    if (this.linkCoreInst && this.linkHaloInst) {
+      (this.linkCoreInst as any).count = this.linkCount;
+      (this.linkHaloInst as any).count = this.linkCount;
+      this.linkCoreInst.instanceMatrix.needsUpdate = true;
+      this.linkHaloInst.instanceMatrix.needsUpdate = true;
+      if (this.linkCoreInst.instanceColor) this.linkCoreInst.instanceColor.needsUpdate = true as any;
+      if (this.linkHaloInst.instanceColor) this.linkHaloInst.instanceColor.needsUpdate = true as any;
     }
   }
   
@@ -206,6 +227,86 @@ export class FilesystemVisualizer {
     });
     this.towers.clear();
     this.towerPositions.clear();
+    this.clearLinks();
+  }
+
+  // Remove and dispose instanced link meshes
+  private clearLinks(): void {
+    if (this.linkCoreInst) {
+      this.rootGroup.remove(this.linkCoreInst);
+      this.linkCoreInst.geometry.dispose();
+      (this.linkCoreInst.material as THREE.Material).dispose();
+      this.linkCoreInst.dispose();
+      this.linkCoreInst = undefined;
+    }
+    if (this.linkHaloInst) {
+      this.rootGroup.remove(this.linkHaloInst);
+      this.linkHaloInst.geometry.dispose();
+      (this.linkHaloInst.material as THREE.Material).dispose();
+      this.linkHaloInst.dispose();
+      this.linkHaloInst = undefined;
+    }
+    this.linkCapacity = 0;
+    this.linkCount = 0;
+  }
+
+  // Ensure instanced meshes exist and have at least the given capacity
+  private ensureLinkCapacity(minCapacity: number): void {
+    if (this.linkCapacity >= minCapacity && this.linkCoreInst && this.linkHaloInst) return;
+    // Grow capacity (double strategy)
+    const newCapacity = Math.max(minCapacity, Math.max(32, this.linkCapacity * 2));
+
+    // Dispose old
+    this.clearLinks();
+
+    // Core: solid cylinder; per-instance color via instanceColor + vertexColors
+    const coreRadius = 0.24;
+    const coreGeom = new THREE.CylinderGeometry(coreRadius, coreRadius, 1, 4, 1, true);
+    const coreMat = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, vertexColors: true });
+    const coreInst = new THREE.InstancedMesh(coreGeom, coreMat, newCapacity);
+    coreInst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    coreInst.frustumCulled = false;
+    coreInst.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(newCapacity * 3), 3);
+    // Halo: additive fresnel approximation using basic material with vertex colors
+    const haloRadius = coreRadius * 1.35;
+    const haloGeom = new THREE.CylinderGeometry(haloRadius, haloRadius, 1, 4, 1, true);
+    const haloMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, vertexColors: true });
+    const haloInst = new THREE.InstancedMesh(haloGeom, haloMat, newCapacity);
+    haloInst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    haloInst.frustumCulled = false;
+    haloInst.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(newCapacity * 3), 3);
+
+    this.rootGroup.add(coreInst);
+    this.rootGroup.add(haloInst);
+    this.linkCoreInst = coreInst;
+    this.linkHaloInst = haloInst;
+    this.linkCapacity = newCapacity;
+    this.linkCount = 0;
+  }
+
+  // Add a link instance from start to end with given color
+  private addLinkInstance(start: THREE.Vector3, end: THREE.Vector3, color: number): void {
+    // Ensure capacity
+    this.ensureLinkCapacity(this.linkCount + 1);
+    if (!this.linkCoreInst || !this.linkHaloInst) return;
+
+    const dir = new THREE.Vector3().subVectors(end, start);
+    const length = dir.length();
+    if (length < 0.0001) return;
+
+    const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+    this.linkDummy.position.copy(mid);
+    const yAxis = new THREE.Vector3(0, 1, 0);
+    this.linkDummy.quaternion.setFromUnitVectors(yAxis, dir.normalize());
+    this.linkDummy.scale.set(1, length, 1);
+    this.linkDummy.updateMatrix();
+
+    const idx = this.linkCount++;
+    this.linkCoreInst.setMatrixAt(idx, this.linkDummy.matrix);
+    this.linkHaloInst.setMatrixAt(idx, this.linkDummy.matrix);
+    const c = new THREE.Color(color);
+    if (this.linkCoreInst.instanceColor) this.linkCoreInst.setColorAt(idx, c);
+    if (this.linkHaloInst.instanceColor) this.linkHaloInst.setColorAt(idx, c);
   }
   
   // Check if a directory should be excluded from visualization
@@ -490,22 +591,43 @@ export class FilesystemVisualizer {
     parentHeight: number,
     color: number
   ): void {
-    const points = [
-      new THREE.Vector3(parentPos.x, parentHeight, parentPos.z), // Start from top of parent tower
-      new THREE.Vector3(childPos.x, 5, childPos.z) // End at base-ish of child tower
-    ];
-    
-    const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    const material = new THREE.LineBasicMaterial({
-      color: color,
+    const start = new THREE.Vector3(parentPos.x, parentHeight, parentPos.z);
+    const end = new THREE.Vector3(childPos.x, 5, childPos.z);
+    if (this.useInstancing) {
+      this.addLinkInstance(start, end, color);
+    } else {
+      this.createConnectionTube(start, end, color);
+    }
+  }
+
+  // Fallback: create a single glowy tube (core + halo) between two points
+  private createConnectionTube(start: THREE.Vector3, end: THREE.Vector3, color: number): void {
+    const dir = new THREE.Vector3().subVectors(end, start);
+    const length = dir.length();
+    if (length < 0.0001) return;
+    const group = new THREE.Group();
+    const coreRadius = 0.24;
+    const coreGeom = new THREE.CylinderGeometry(coreRadius, coreRadius, 1, 4, 1, true);
+    const coreMat = new THREE.MeshStandardMaterial({
+      color,
+      emissive: new THREE.Color(color),
+      emissiveIntensity: 1.7,
       transparent: true,
-      opacity: 0.5, // Increased opacity for better visibility
-      blending: THREE.AdditiveBlending,
-      linewidth: 2 // Attempt to make lines thicker (note: may not work in WebGL)
+      opacity: 0.95
     });
-    
-    const line = new THREE.Line(geometry, material);
-    this.rootGroup.add(line);
+    const core = new THREE.Mesh(coreGeom, coreMat);
+    const haloRadius = coreRadius * 1.35;
+    const haloGeom = new THREE.CylinderGeometry(haloRadius, haloRadius, 1, 4, 1, true);
+    const haloMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false });
+    const halo = new THREE.Mesh(haloGeom, haloMat);
+    group.add(core);
+    group.add(halo);
+    const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+    group.position.copy(mid);
+    const yAxis = new THREE.Vector3(0, 1, 0);
+    group.quaternion.setFromUnitVectors(yAxis, dir.clone().normalize());
+    group.scale.set(1, length, 1);
+    this.rootGroup.add(group);
   }
 
   // Create a main directory tower

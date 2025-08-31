@@ -61,9 +61,9 @@ composer.addPass(renderPass);
 
 const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(window.innerWidth, window.innerHeight),
-  0.5, // strength
-  0.4, // radius
-  0.85 // threshold
+  1.0, // strength (more glow)
+  0.6, // radius (wider spill)
+  0.7 // threshold (bloom more highlights)
 );
 composer.addPass(bloomPass);
 
@@ -427,6 +427,8 @@ async function initialize() {
   
   // Initialize CyberInfoWindow with camera controller
   cyberInfoWindow = new CyberInfoWindow(wsClient, agentManager, cameraController);
+  // Expose to modes via context so Automatic mode can control it
+  (modeContext as any).cyberInfoWindow = cyberInfoWindow;
   
   // Initialize mode manager with default mode
   await modeManager.initialize(AppMode.AUTOMATIC);

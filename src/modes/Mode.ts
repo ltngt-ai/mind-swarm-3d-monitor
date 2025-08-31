@@ -6,6 +6,7 @@ import { GridSystem } from '../GridSystem';
 import { WebSocketClient } from '../WebSocketClient';
 import { CameraController } from '../camera/CameraController';
 import { eventBus, Events } from '../utils/EventBus';
+import { CyberInfoWindow } from '../ui/CyberInfoWindow';
 
 export interface ModeContext {
   scene: THREE.Scene;
@@ -17,6 +18,7 @@ export interface ModeContext {
   gridSystem: GridSystem;
   wsClient: WebSocketClient;
   gui: GUI;
+  cyberInfoWindow?: CyberInfoWindow;
 }
 
 export abstract class Mode {
