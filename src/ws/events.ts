@@ -31,6 +31,7 @@ export type EventType =
   | 'token_boost_cleared'
   | 'cyber_restarted'
   | 'cyber_paused'
+  | 'biofeedback'
   | 'ping';
 
 export interface EventEnvelope<TType extends EventType = EventType, TData = any> {
@@ -73,6 +74,15 @@ export type MessageActivity = EventEnvelope<'message_activity', { from: string; 
 export type BrainThinking = EventEnvelope<'brain_thinking', { cyber: string; cycle_number: number; stage: string; request: Record<string, unknown>; response?: Record<string, unknown> }>
 export type FileOperation = EventEnvelope<'file_operation', { cyber: string; cycle_number: number; operation: string; path: string; details?: Record<string, unknown> }>
 export type TokenUsage = EventEnvelope<'token_usage', { cyber: string; cycle_number: number; stage: string; tokens: Record<string, number> }>
+export type Biofeedback = EventEnvelope<'biofeedback', {
+  cyber: string;
+  boredom?: number;
+  tiredness?: number;
+  duty?: number;
+  restlessness?: number;
+  memory_pressure?: number;
+  timestamp?: string;
+}>
 
 export type ServerEvent =
   | AgentCreated | AgentTerminated
@@ -84,6 +94,7 @@ export type ServerEvent =
   | AgentStateChanged | AgentThinking | MessageSent | FileActivity | SystemMetrics
   | CycleStarted | CycleCompleted | StageStarted | StageCompleted
   | MemoryChanged | MessageActivity | BrainThinking | FileOperation | TokenUsage
+  | Biofeedback
   | Ping
   | EventEnvelope; // fallback envelope for any future event
 

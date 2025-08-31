@@ -1411,10 +1411,81 @@
           }
         }
       }
+    },
+    "/biofeedback/{name}/current": {
+      "get": {
+        "summary": "Get Biofeedback (Current)",
+        "description": "Get the latest biofeedback state for a given Cyber.",
+        "operationId": "get_biofeedback_current_biofeedback__name__current_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BiofeedbackState" }
+              }
+            }
+          },
+          "404": { "description": "Cyber not found" }
+        }
+      }
+    },
+    "/biofeedback/{name}/history": {
+      "get": {
+        "summary": "Get Biofeedback (History)",
+        "description": "Get recent biofeedback history for a Cyber.",
+        "operationId": "get_biofeedback_history_biofeedback__name__history_get",
+        "parameters": [
+          { "name": "name", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "minutes", "in": "query", "required": false, "schema": { "type": "integer", "default": 15 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BiofeedbackHistoryResponse" }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "BiofeedbackState": {
+        "type": "object",
+        "title": "BiofeedbackState",
+        "properties": {
+          "cyber": { "type": "string", "title": "Cyber" },
+          "arousal": { "type": "number", "title": "Arousal" },
+          "valence": { "type": "number", "title": "Valence" },
+          "attention": { "type": "number", "title": "Attention" },
+          "heart_rate": { "anyOf": [{"type": "number"}, {"type": "null"}], "title": "Heart Rate" },
+          "timestamp": { "type": "string", "title": "Timestamp" }
+        },
+        "required": ["cyber", "timestamp"]
+      },
+      "BiofeedbackHistoryResponse": {
+        "type": "object",
+        "title": "BiofeedbackHistoryResponse",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/BiofeedbackState" }
+          }
+        },
+        "required": ["items"]
+      },
       "AnnouncementRequest": {
         "properties": {
           "title": {

@@ -68,6 +68,8 @@ export class AutomaticMode extends Mode {
     this.context.wsClient.on('agent_thinking', this.onAgentThinking.bind(this));
     this.context.wsClient.on('message_sent', this.onMessageSent.bind(this));
     this.context.wsClient.on('file_activity', this.onFileActivity.bind(this));
+    // Biofeedback signal integration
+    this.context.wsClient.on('biofeedback', this.onBiofeedback.bind(this));
   }
 
   protected cleanupEventHandlers(): void {
@@ -385,6 +387,27 @@ export class AutomaticMode extends Mode {
     this.addActivityEvent('file', data.cyber);
   }
 
+  private onBiofeedback(data: any): void {
+    // Weight camera interest using backend biofeedback metrics (0-100)
+    const boredom = clamp0to100(data.boredom);
+    const tired = clamp0to100(data.tiredness);
+    const duty = clamp0to100(data.duty);
+    const restless = clamp0to100(data.restlessness);
+    const mem = clamp0to100(data.memory_pressure);
+
+    // Heuristic: prefer high restlessness (movement), decent duty, lower boredom; slightly avoid very tired
+    const score = (restless * 0.6) + (duty * 0.25) + ((100 - boredom) * 0.25) + (mem * 0.1) - (tired * 0.2);
+    const boost = Math.max(0, score / 25); // normalize to a small additive boost
+    const current = this.cyberActivity.get(data.cyber) || 0;
+    this.cyberActivity.set(data.cyber, current + boost);
+    this.addActivityEvent('bio', data.cyber);
+    // If idle or unfocused, pivot to this cyber quickly
+    if (!this.currentShot || !this.currentShot.target) {
+      this.queueShot({ type: 'cyber-focus', duration: this.minShotDuration, target: data.cyber });
+      if (!this.currentShot) this.switchShot();
+    }
+  }
+
   private addActivityEvent(type: string, cyber?: string): void {
     this.recentEvents.push({
       type,
@@ -513,4 +536,11 @@ export class AutomaticMode extends Mode {
     const names = this.context.agentManager.getAgentNames();
     return names.length > 0 ? names[0] : null;
   }
+}
+
+// Helper to clamp potential undefined/NaN to 0-100
+function clamp0to100(v: any): number {
+  const n = typeof v === 'number' ? v : 0;
+  if (!isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, n));
 }
