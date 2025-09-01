@@ -148,7 +148,7 @@ export class AgentManager {
     agents.forEach((agent, index) => {
       if (agent.currentLocation && this.filesystemVisualizer) {
         // Position agent at filesystem location
-        const locationPosition = this.getFilesystemLocationPosition(agent.currentLocation);
+        const locationPosition = this.getFilesystemLocationPosition(agent.currentLocation, agent.name);
         if (locationPosition) {
           agent.targetPosition.copy(locationPosition);
           agent.targetPosition.y += 8; // Float above the filesystem tower
@@ -206,13 +206,24 @@ export class AgentManager {
     );
   }
   
-  // Get 3D position for a filesystem path
-  private getFilesystemLocationPosition(location: string): THREE.Vector3 | null {
+  // Get 3D position for a filesystem path, with special handling for personal paths
+  private getFilesystemLocationPosition(location: string, agentName?: string): THREE.Vector3 | null {
     if (!this.filesystemVisualizer) return null;
-    
-    // Get tower position from filesystem visualizer
-    const towerPosition = this.filesystemVisualizer.getTowerPosition(location);
-    return towerPosition;
+    const norm = (location || '').replace(/\\/g, '/');
+    if (norm.startsWith('/personal') || norm.startsWith('personal')) {
+      const candidates = [
+        agentName ? `cybers/${agentName}` : '',
+        agentName || '',
+        agentName ? `cybers/${(agentName || '').toLowerCase()}` : '',
+        (agentName || '').toLowerCase(),
+      ].filter(Boolean);
+      for (const key of candidates) {
+        const pos = this.filesystemVisualizer.getTowerPosition(key);
+        if (pos) return pos;
+      }
+    }
+    // Fallback direct lookup
+    return this.filesystemVisualizer.getTowerPosition(location);
   }
   
   // Update connection line between agent and its current location
@@ -368,7 +379,7 @@ export class AgentManager {
       
       // Reposition the agent
       if (location && this.filesystemVisualizer) {
-        const locationPosition = this.getFilesystemLocationPosition(location);
+        const locationPosition = this.getFilesystemLocationPosition(location, name);
         if (locationPosition) {
           // Calculate orbit position for this agent at this location
           const orbitPosition = this.calculateOrbitPosition(location, name, locationPosition);
@@ -380,8 +391,7 @@ export class AgentManager {
           // Highlight the tower at this location
           this.filesystemVisualizer.highlightTower(location);
         } else {
-          // Unknown location -> treat as no location (default circle orbit)
-          agent.currentLocation = undefined;
+          // Unknown location currently not in visualization -> fallback orbit (keep location for later resolution)
           if (agent.connectionLine) {
             this.scene.remove(agent.connectionLine);
             (agent.connectionLine as THREE.Object3D).traverse(obj => {
@@ -657,12 +667,14 @@ export class AgentManager {
     agentList.forEach((agent, idx) => {
       // If agent has a location, continuously update its orbit position
       if (agent.currentLocation && this.filesystemVisualizer) {
-        const locationPosition = this.getFilesystemLocationPosition(agent.currentLocation);
+        const locationPosition = this.getFilesystemLocationPosition(agent.currentLocation, agent.name);
         if (locationPosition) {
           const orbitPosition = this.calculateOrbitPosition(agent.currentLocation, agent.name, locationPosition);
           agent.targetPosition.copy(orbitPosition);
+          // Ensure connection line exists or is updated once location resolves
+          this.updateConnectionLine(agent, locationPosition);
         } else {
-          // Fallback if tower not found for claimed location
+          // Fallback if tower not found for claimed location (keep location for later resolution)
           this.updateDefaultCircleOrbit(agent, idx, total);
         }
       } else {
@@ -688,25 +700,7 @@ export class AgentManager {
       const bobAmount = agent.state === 'sleeping' ? 0.1 : 0.3;
       agent.mesh.position.y = agent.position.y + Math.sin(Date.now() * 0.001 + agent.position.x) * bobAmount;
       
-      // Update connection line if it exists
-      if (agent.connectionLine && agent.currentLocation && this.filesystemVisualizer) {
-        const locationPosition = this.getFilesystemLocationPosition(agent.currentLocation);
-        if (locationPosition) {
-          const topY = this.filesystemVisualizer?.getTowerHeight?.(agent.currentLocation || '') ?? (locationPosition.y + 5);
-          const start = new THREE.Vector3(locationPosition.x, topY, locationPosition.z);
-          const end = new THREE.Vector3(agent.mesh.position.x, agent.mesh.position.y, agent.mesh.position.z);
-          const obj = agent.connectionLine as THREE.Object3D;
-          const dir = new THREE.Vector3().subVectors(end, start);
-          const length = dir.length();
-          if (length > 0.0001) {
-            const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
-            obj.position.copy(mid);
-            const yAxis = new THREE.Vector3(0, 1, 0);
-            obj.quaternion.setFromUnitVectors(yAxis, dir.clone().normalize());
-            obj.scale.set(1, length, 1);
-          }
-        }
-      }
+      // Connection line is created/updated above when locationPosition is available
       
       // Update thought bubble position to follow agent
       if (agent.thoughtBubble) {

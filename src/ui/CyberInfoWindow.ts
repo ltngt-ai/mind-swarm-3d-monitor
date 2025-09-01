@@ -1,6 +1,7 @@
 import { WebSocketClient } from '../WebSocketClient';
 import { AgentManager } from '../AgentManager';
 import { CameraController, CameraMode } from '../camera/CameraController';
+import { config } from '../config';
 
 export interface CycleData {
   cycle_number: number;
@@ -41,6 +42,22 @@ export class CyberInfoWindow {
   private textZoom = 1.0;  // Default zoom level
   
   private isFollowing = false;
+  // TTS state
+  private isSpeaking = false;
+  private ttsUtterance: SpeechSynthesisUtterance | null = null;
+  private isAutoSpeak: boolean = true;
+  private lastSpokenText: string | null = null;
+  private userGestureEnabled: boolean = false;
+  private voicesReady: boolean = false;
+  private pendingSpeakText: string | null = null;
+  private ttsAudio: HTMLAudioElement | null = null; // fallback audio element for external TTS
+  private audioUnlocked: boolean = false;
+  private readonly silentWavDataUri =
+    'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA='; // very short silent wav
+  // Burst handling / queueing
+  private speakQueue: string[] = [];
+  private autoSpeakTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly autoSpeakDelayMs = 1200;
   
   constructor(wsClient: WebSocketClient, agentManager: AgentManager, cameraController?: CameraController) {
     this.wsClient = wsClient;
@@ -73,6 +90,7 @@ export class CyberInfoWindow {
     
     this.setupWindow();
     document.body.appendChild(this.container);
+    this.setupAudioEnablers();
     
     // Listen for WebSocket events
     this.setupEventListeners();
@@ -123,7 +141,7 @@ export class CyberInfoWindow {
         cursor: move;
         box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), 0 2px 4px rgba(0,0,0,0.3);
       ">
-        <span style="color: #00ffff; font-weight: bold; text-shadow: 0 0 5px rgba(0,255,255,0.5);" id="cyber-name">No Cyber Selected</span>
+        <span style="color: #00ffff; font-weight: bold; text-shadow: 0 0 5px rgba(0,255,255,0.5); font-size: 22px;" id="cyber-name">No Cyber Selected</span>
         <div class="window-controls" style="display: flex; gap: 8px; align-items: center;">
           <button class="win-btn" id="btn-zoom-out" style="
             background: rgba(0, 255, 255, 0.2);
@@ -194,6 +212,24 @@ export class CyberInfoWindow {
           cursor: pointer;
           flex: 1;
         ">🔄 Refresh</button>
+        <button id="btn-tts" style="
+          background: rgba(255, 128, 0, 0.2);
+          border: 1px solid #ff8000;
+          color: #ffb366;
+          padding: 5px 10px;
+          border-radius: 4px;
+          cursor: pointer;
+          flex: 1;
+        ">🔊 Read</button>
+        <button id="btn-tts-test" style="
+          background: rgba(0, 255, 128, 0.2);
+          border: 1px solid #00ff80;
+          color: #00ff80;
+          padding: 5px 10px;
+          border-radius: 4px;
+          cursor: pointer;
+          flex: 1;
+        ">🔈 Test Audio</button>
       </div>
       
       <!-- Cycle Navigation -->
@@ -247,7 +283,7 @@ export class CyberInfoWindow {
       <!-- Stage Selector -->
       <div class="stage-selector" style="
         padding: 10px;
-        display: flex;
+        display: none; /* hidden in automatic mode (show reflections only) */
         gap: 5px;
         flex-wrap: wrap;
         border-bottom: 1px solid #0080ff;
@@ -342,6 +378,8 @@ export class CyberInfoWindow {
     const btnFollow = this.container.querySelector('#btn-follow') as HTMLButtonElement;
     const btnMessage = this.container.querySelector('#btn-message') as HTMLButtonElement;
     const btnRefresh = this.container.querySelector('#btn-refresh') as HTMLButtonElement;
+    const btnTts = this.container.querySelector('#btn-tts') as HTMLButtonElement;
+    const btnTtsTest = this.container.querySelector('#btn-tts-test') as HTMLButtonElement;
     const btnPrevCycle = this.container.querySelector('#btn-prev-cycle') as HTMLButtonElement;
     const btnNextCycle = this.container.querySelector('#btn-next-cycle') as HTMLButtonElement;
     const btnCurrentCycle = this.container.querySelector('#btn-current-cycle') as HTMLButtonElement;
@@ -404,6 +442,8 @@ export class CyberInfoWindow {
     btnFollow.addEventListener('click', () => this.toggleFollow());
     btnMessage.addEventListener('click', () => this.openMessageDialog());
     btnRefresh.addEventListener('click', () => this.refreshData());
+    if (btnTts) btnTts.addEventListener('click', () => this.toggleTTS());
+    if (btnTtsTest) btnTtsTest.addEventListener('click', () => this.testTTS());
     
     // Cycle navigation
     btnPrevCycle.addEventListener('click', () => this.navigateCycle(-1));
@@ -436,6 +476,62 @@ export class CyberInfoWindow {
         this.selectStage(stage);
       });
     });
+  }
+
+  // Prepare auto-play audio by waiting for a user gesture and voices load
+  private setupAudioEnablers() {
+    const onFirstGesture = () => {
+      this.userGestureEnabled = true;
+      // Create and unlock a persistent audio element (CEF/OBS needs a gesture)
+      if (!this.ttsAudio) {
+        this.ttsAudio = document.createElement('audio');
+        this.ttsAudio.style.display = 'none';
+        this.ttsAudio.preload = 'auto';
+        this.ttsAudio.autoplay = true;
+        this.ttsAudio.controls = false;
+        this.ttsAudio.onplay = () => { this.audioUnlocked = true; };
+        this.ttsAudio.onerror = () => { /* ignore unlock errors */ };
+        this.container.appendChild(this.ttsAudio);
+      }
+      try {
+        this.ttsAudio!.src = this.silentWavDataUri;
+        const p = this.ttsAudio!.play();
+        if (p && typeof p.then === 'function') {
+          p.then(() => {
+            this.audioUnlocked = true;
+            this.updateStatus('Audio unlocked');
+          }).catch(() => {
+            // Some builds still unlock after any gesture even if play fails
+            this.audioUnlocked = true;
+            this.updateStatus('Audio unlocked (fallback)');
+          });
+        }
+      } catch {}
+      if (this.pendingSpeakText) {
+        const text = this.pendingSpeakText;
+        this.pendingSpeakText = null;
+        this.startTTS(text);
+      }
+      window.removeEventListener('pointerdown', onFirstGesture);
+      window.removeEventListener('keydown', onFirstGesture);
+    };
+    window.addEventListener('pointerdown', onFirstGesture, { once: true });
+    window.addEventListener('keydown', onFirstGesture, { once: true });
+
+    if ('speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.onvoiceschanged = () => {
+          this.voicesReady = true;
+          if (this.userGestureEnabled && this.pendingSpeakText) {
+            const text = this.pendingSpeakText;
+            this.pendingSpeakText = null;
+            this.startTTS(text);
+          }
+        };
+        const voices = window.speechSynthesis.getVoices();
+        if (voices && voices.length > 0) this.voicesReady = true;
+      } catch {}
+    }
   }
   
   private setupEventListeners() {
@@ -580,6 +676,7 @@ export class CyberInfoWindow {
             const text = typeof data.reflection === 'string' ? data.reflection : JSON.stringify(data.reflection);
             contentEl.innerHTML = this.formatStageData(text);
             this.updateStatus(`Showing reflection for cycle ${this.selectedCycle}`);
+            this.maybeAutoSpeakReflection(typeof data.reflection === 'string' ? data.reflection : undefined);
           }
         }
       }
@@ -619,6 +716,23 @@ export class CyberInfoWindow {
         }
       }
     });
+
+    // Update title with current location when an agent's location changes
+    this.wsClient.on('agent_location_changed', (data: any) => {
+      if (!this.selectedCyber) return;
+      if (data.name === this.selectedCyber) {
+        this.updateTitleWithLocation();
+      }
+    });
+
+    // Also react to status updates that may include location
+    this.wsClient.on('status_update', (data: any) => {
+      if (!this.selectedCyber || !data?.Cybers) return;
+      const info = (data.Cybers as Record<string, any>)[this.selectedCyber];
+      if (info && (typeof info.current_location === 'string' || info.current_location === null)) {
+        this.updateTitleWithLocation();
+      }
+    });
   }
   
   public selectCyber(cyberName: string) {
@@ -629,9 +743,8 @@ export class CyberInfoWindow {
     const contentEl = this.container.querySelector('#info-content') as HTMLElement | null;
     if (contentEl) contentEl.innerHTML = '';
     
-    // Update title
-    const nameEl = this.container.querySelector('#cyber-name') as HTMLElement;
-    nameEl.textContent = `Cyber: ${cyberName}`;
+    // Update title (includes current location if available)
+    this.updateTitleWithLocation();
     
     // Default to Reflection stage view
     this.selectStage('reflection');
@@ -652,6 +765,41 @@ export class CyberInfoWindow {
       cyber: cyberName,
       request_id: `current_reflection_${Date.now()}`
     });
+  }
+
+  // Update the title bar to include current location next to the cyber name
+  private updateTitleWithLocation() {
+    const nameEl = this.container.querySelector('#cyber-name') as HTMLElement | null;
+    if (!nameEl) return;
+    const cyberName = this.selectedCyber || 'No Cyber Selected';
+    let locationText = '';
+    if (this.selectedCyber) {
+      const agent = this.agentManager.getAgentData(this.selectedCyber);
+      const loc = agent?.currentLocation;
+      if (loc && typeof loc === 'string') {
+        locationText = ` — ${this.ellipsizePath(loc, 60)}`;
+      }
+    }
+    nameEl.textContent = `Cyber: ${cyberName}${locationText}`;
+  }
+
+  // Ellipsize a path by keeping the start and end, collapsing the middle.
+  // Example: a/b/c/d/e/f -> a/b/…/e/f (and also limit total length)
+  private ellipsizePath(path: string, maxLen: number = 60): string {
+    const norm = path.replace(/\\/g, '/');
+    const parts = norm.split('/').filter(Boolean);
+    if (parts.length <= 4) {
+      return norm.length > maxLen ? `${norm.slice(0, Math.max(0, maxLen - 1))}…` : norm;
+    }
+    const start = parts.slice(0, 2).join('/');
+    const end = parts.slice(-2).join('/');
+    let out = `${start}/…/${end}`;
+    if (out.length > maxLen) {
+      // If still too long, trim start further
+      const keep = Math.max(8, Math.floor((maxLen - 3) / 2));
+      out = `${norm.slice(0, keep)}…${norm.slice(-keep)}`;
+    }
+    return out;
   }
   
   private selectStage(stage: string) {
@@ -701,6 +849,10 @@ export class CyberInfoWindow {
     // Format and display the stage data
     contentEl.innerHTML = this.formatStageData(stageData);
     this.updateStatus(`Showing ${this.selectedStage} from cycle ${this.selectedCycle}`);
+    // Auto-speak reflection when it changes
+    if (this.selectedStage === 'reflection') {
+      this.maybeAutoSpeakReflection();
+    }
   }
   
   private formatStageData(data: any): string {
@@ -1079,6 +1231,334 @@ export class CyberInfoWindow {
     // TODO: Implement message dialog
     console.log('Opening message dialog for', this.selectedCyber);
     this.updateStatus('Message dialog not yet implemented');
+  }
+
+  // Toggle text-to-speech for the current reflection
+  private toggleTTS() {
+    if (this.isSpeaking) {
+      this.stopTTS();
+    } else {
+      const text = this.getCurrentReflectionText();
+      if (!text) {
+        // Proactively request reflection, then auto-speak on response
+        if (this.selectedCyber) {
+          this.updateStatus('Requesting current reflection…');
+          try {
+            this.wsClient.send({ type: 'get_current_reflection', cyber: this.selectedCyber, request_id: `read_${Date.now()}` });
+          } catch {}
+        } else {
+          this.updateStatus('No cyber selected');
+        }
+        return;
+      }
+      this.updateStatus(`Reading ${text.length} characters…`);
+      this.speak(text);
+    }
+  }
+
+  // Choose best TTS path (external endpoint if configured; else Web Speech API)
+  private speak(text: string) {
+    const trimmed = (text || '').trim();
+    if (!trimmed) { this.updateStatus('Nothing to read'); return; }
+    // Clamp to reasonable length for TTS
+    const MAX_CHARS = 2000;
+    const payload = trimmed.length > MAX_CHARS ? `${trimmed.slice(0, MAX_CHARS)}…` : trimmed;
+    // If currently speaking, queue the latest payload and let current finish
+    if (this.isSpeaking) {
+      this.speakQueue = [payload]; // keep only the latest
+      this.updateStatus('Queued next reflection');
+      return;
+    }
+    if (config.ttsUrl) this.startExternalTTS(payload); else this.startTTS(payload);
+  }
+
+  private startTTS(text: string) {
+    try {
+      // Fallback to external TTS endpoint if speechSynthesis is unavailable
+      if (!('speechSynthesis' in window)) {
+        if (config.ttsUrl) {
+          this.startExternalTTS(text);
+        } else {
+          this.updateStatus('TTS unsupported in this browser');
+        }
+        return;
+      }
+      // If we don't have interaction or voices yet, queue
+      if (!this.userGestureEnabled) {
+        this.pendingSpeakText = text;
+        this.updateStatus('Tap to enable audio');
+        return;
+      }
+      if (!this.voicesReady) {
+        this.pendingSpeakText = text;
+        this.updateStatus('Loading voices…');
+        try { window.speechSynthesis.getVoices(); } catch {}
+        return;
+      }
+
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      // Voice tuning (conservative defaults)
+      utter.rate = this.getDesiredRate();
+      utter.pitch = 1.0;
+      utter.volume = 1.0;
+      const v = this.pickVoiceForCyber(this.selectedCyber || '', window.speechSynthesis.getVoices());
+      if (v) utter.voice = v;
+      utter.onstart = () => {
+        this.isSpeaking = true;
+        this.lastSpokenText = text;
+        this.updateTTSButton();
+        this.updateStatus('Reading reflection…');
+      };
+      utter.onend = () => {
+        this.isSpeaking = false;
+        this.ttsUtterance = null;
+        this.updateTTSButton();
+        this.updateStatus('Finished reading reflection');
+        this.processNextSpeak();
+      };
+      utter.onerror = () => {
+        this.isSpeaking = false;
+        this.ttsUtterance = null;
+        this.updateTTSButton();
+        this.updateStatus('TTS error');
+        this.processNextSpeak();
+      };
+      this.ttsUtterance = utter;
+      window.speechSynthesis.speak(utter);
+    } catch (e) {
+      this.isSpeaking = false;
+      this.ttsUtterance = null;
+      this.updateTTSButton();
+      this.updateStatus('Failed to start TTS');
+    }
+  }
+
+  // External TTS: POST text to an endpoint, expect audio (audio/mpeg or audio/wav)
+  private async startExternalTTS(text: string) {
+    try {
+      if (!config.ttsUrl) {
+        this.updateStatus('No TTS endpoint configured');
+        return;
+      }
+      // Ensure an <audio> element exists and is attached (helps some embeds)
+      if (!this.ttsAudio) {
+        this.ttsAudio = document.createElement('audio');
+        this.ttsAudio.style.display = 'none';
+        this.ttsAudio.preload = 'auto';
+        this.ttsAudio.autoplay = true;
+        this.ttsAudio.controls = false;
+        (this.ttsAudio as any).crossOrigin = 'anonymous';
+        (this.ttsAudio as any).playsInline = true;
+        this.container.appendChild(this.ttsAudio);
+      }
+      // Stop previous playback
+      try { this.ttsAudio.pause(); } catch {}
+      if (!this.audioUnlocked && this.userGestureEnabled) {
+        // Try to unlock quickly with a silent clip
+        try {
+          this.ttsAudio.src = this.silentWavDataUri;
+          await this.ttsAudio.play().catch(() => {});
+          this.audioUnlocked = true;
+        } catch {}
+      }
+      // Prefer direct streaming via GET (simpler path for OBS/CEF)
+      const streamUrl = `${config.ttsUrl}?text=${encodeURIComponent(text)}&voice=${encodeURIComponent(this.getVoiceNameForCyber(this.selectedCyber || ''))}&rate=${encodeURIComponent(String(this.getDesiredSayRate()))}`;
+      this.updateStatus('Requesting TTS (stream)…');
+      this.ttsAudio.src = streamUrl;
+      this.ttsAudio.onerror = () => {
+        this.updateStatus('Audio element error');
+      };
+      this.ttsAudio.onended = () => {
+        this.isSpeaking = false;
+        this.updateTTSButton();
+        this.processNextSpeak();
+      };
+      this.ttsAudio.onerror = () => {
+        // Try next queued item if the current failed
+        this.isSpeaking = false;
+        this.updateTTSButton();
+        this.processNextSpeak();
+      };
+      this.ttsAudio.onplay = () => {
+        this.isSpeaking = true;
+        this.lastSpokenText = text;
+        this.updateTTSButton();
+        this.updateStatus('Playing TTS audio…');
+      };
+      let played = false;
+      await this.ttsAudio.play().then(() => { played = true; }).catch(() => {});
+      if (!played) {
+        // Fallback: fetch blob and play
+        this.updateStatus('TTS stream blocked, fetching audio…');
+        const res = await fetch(config.ttsUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, voice: this.getVoiceNameForCyber(this.selectedCyber || ''), rate: this.getDesiredSayRate() })
+        });
+        if (!res.ok) {
+          this.updateStatus(`TTS request failed (${res.status})`);
+          this.isSpeaking = false;
+          this.updateTTSButton();
+          return this.processNextSpeak();
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        this.ttsAudio.src = url;
+        played = false;
+        await this.ttsAudio.play().then(() => { played = true; }).catch((e) => {
+          this.updateStatus('Audio playback blocked');
+          console.warn('TTS blob play() failed', e);
+        });
+        if (!played) {
+          // Give up cleanly and try next queued item
+          this.isSpeaking = false;
+          this.updateTTSButton();
+          return this.processNextSpeak();
+        }
+      }
+    } catch (e) {
+      this.isSpeaking = false;
+      this.updateTTSButton();
+      this.updateStatus('External TTS failed');
+    }
+  }
+
+  // Desired speaking rate for Web Speech (slightly faster than default)
+  private getDesiredRate(): number { return 1.2; }
+  // Desired say(1) rate (macOS default ~175); use a bit faster
+  private getDesiredSayRate(): number { return 220; }
+
+  // Map cyber name to a stable voice choice
+  private getVoiceNameForCyber(name: string): string {
+    // Common macOS voices; you can customize
+    const candidates = ['Samantha', 'Alex', 'Victoria', 'Ava', 'Daniel', 'Karen', 'Moira'];
+    if (!name) return candidates[0];
+    const idx = this.hashString(name) % candidates.length;
+    return candidates[idx];
+  }
+
+  private pickVoiceForCyber(name: string, voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
+    const targetName = this.getVoiceNameForCyber(name);
+    // Prefer exact match by name
+    let v = voices.find(v => v.name === targetName) || null;
+    if (v) return v;
+    // Fallback: pick an English voice deterministically
+    const en = voices.filter(v => (v.lang || '').toLowerCase().startsWith('en'));
+    if (en.length > 0) {
+      const idx = this.hashString(name || 'default') % en.length;
+      return en[idx];
+    }
+    // Final fallback: any voice
+    return voices[0] || null;
+  }
+
+  private hashString(s: string): number {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+
+  // Manual test button to validate OBS Browser Source audio routing
+  private testTTS() {
+    const phrase = 'Test audio. If you can hear this, OBS audio routing is working.';
+    if ('speechSynthesis' in window && !config.ttsUrl) {
+      // Use Web Speech API in regular browsers
+      this.startTTS(phrase);
+    } else {
+      // Force external TTS if configured
+      if (config.ttsUrl) {
+        this.startExternalTTS(phrase);
+      } else {
+        this.updateStatus('No TTS available: set ?tts= endpoint or run START_TTS=1');
+      }
+    }
+  }
+
+  private stopTTS() {
+    try { window.speechSynthesis.cancel(); } catch {}
+    try { this.ttsAudio?.pause(); } catch {}
+    this.isSpeaking = false;
+    this.ttsUtterance = null;
+    this.updateTTSButton();
+    this.updateStatus('Stopped reading');
+  }
+
+  private updateTTSButton() {
+    const btn = this.container.querySelector('#btn-tts') as HTMLButtonElement | null;
+    if (!btn) return;
+    if (this.isSpeaking) {
+      btn.textContent = '⏹ Stop';
+      btn.style.background = 'rgba(255, 64, 64, 0.25)';
+      btn.style.borderColor = '#ff4040';
+      btn.style.color = '#ffcccc';
+    } else {
+      btn.textContent = '🔊 Read';
+      btn.style.background = 'rgba(255, 128, 0, 0.2)';
+      btn.style.borderColor = '#ff8000';
+      btn.style.color = '#ffb366';
+    }
+  }
+
+  // Extract the current reflection text to be read aloud
+  private getCurrentReflectionText(): string | null {
+    // Prefer structured cycle data if available
+    const data = this.cycleData.get(this.selectedCycle) as any;
+    let reflection = data?.reflection;
+    let text: string | null = null;
+    if (typeof reflection === 'string') {
+      text = reflection;
+    } else if (reflection) {
+      text = reflection.cycle_summary
+        || reflection.summary
+        || reflection.stage_output?.cycle_summary
+        || reflection.stage_output?.summary
+        || null;
+    }
+    // Fallback to currently displayed content text
+    if (!text) {
+      const contentEl = this.container.querySelector('#info-content') as HTMLElement | null;
+      if (contentEl) {
+        const raw = contentEl.innerText || contentEl.textContent || '';
+        text = raw.trim().length > 0 ? raw.trim() : null;
+      }
+    }
+    return text;
+  }
+
+  // Speak reflection automatically when it changes
+  private maybeAutoSpeakReflection(providedText?: string) {
+    if (!this.isAutoSpeak) return;
+    const text = (providedText && typeof providedText === 'string')
+      ? providedText
+      : (this.getCurrentReflectionText() || '');
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (trimmed === (this.lastSpokenText || '').trim()) return; // avoid repeats
+    // Debounce bursts of reflections; only speak the latest after a short settle
+    if (this.autoSpeakTimer) clearTimeout(this.autoSpeakTimer);
+    this.autoSpeakTimer = setTimeout(() => {
+      this.autoSpeakTimer = null;
+      // If currently speaking, queue latest; otherwise speak now
+      if (this.isSpeaking) {
+        this.speakQueue = [trimmed];
+        this.updateStatus('Queued next reflection');
+      } else {
+        this.speak(trimmed);
+      }
+    }, this.autoSpeakDelayMs);
+  }
+
+  // Speak the next queued item if present (uses latest only)
+  private processNextSpeak() {
+    if (this.speakQueue.length > 0) {
+      const next = this.speakQueue[this.speakQueue.length - 1];
+      this.speakQueue = [];
+      this.speak(next);
+    }
   }
   
   private refreshData() {

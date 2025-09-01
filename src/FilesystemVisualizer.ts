@@ -20,10 +20,13 @@ export class FilesystemVisualizer {
   private fileGeometry: THREE.SphereGeometry;
   private time: number = 0;
   private filesystemStructure: FilesystemStructure | null = null;
-  private updateInterval: NodeJS.Timeout | null = null;
+  // Use browser-safe interval type
+  private updateInterval: ReturnType<typeof setInterval> | null = null;
   private apiUrl: string = config.apiUrl;
   // Track visual heights per tower key to precisely anchor links
   private towerHeights: Map<string, number> = new Map();
+  // Track occupied x/z positions to avoid overlapping towers
+  private occupiedPositions: Array<THREE.Vector2> = [];
   
   // Instanced link meshes (filesystem tower connections)
   private linkCoreInst?: THREE.InstancedMesh;
@@ -31,7 +34,8 @@ export class FilesystemVisualizer {
   private linkCapacity: number = 0;
   private linkCount: number = 0;
   private linkDummy: THREE.Object3D = new THREE.Object3D();
-  private useInstancing: boolean = false; // fallback to per-link meshes if false
+  // Prefer stability/brightness: disable instancing by default
+  private useInstancing: boolean = false;
   // Group to contain all link-related objects (instanced or fallback tubes)
   private linkGroup: THREE.Group = new THREE.Group();
   
@@ -176,12 +180,11 @@ export class FilesystemVisualizer {
       console.log('Tower positions created:', Array.from(this.towerPositions.keys()));
     }
     
-    // Create cyber home directories if they exist
+    // Create minimal towers for each Cyber's personal root (backend provides list only)
     if (this.filesystemStructure.cyber_homes && this.filesystemStructure.cyber_homes.length > 0) {
       const cyberPositions = this.calculateCyberHomePositions(this.filesystemStructure.cyber_homes.length);
       this.filesystemStructure.cyber_homes.forEach((cyberHome, index) => {
-        // Use the directory name for small towers
-        const towerName = cyberHome.name.replace('-home', ''); // Clean up display name
+        const towerName = cyberHome.name; // show raw name
         this.createCyberHomeTower(cyberHome, cyberPositions[index], towerName);
       });
     }
@@ -219,22 +222,67 @@ export class FilesystemVisualizer {
       this.rootGroup.remove(tower);
       // Dispose of geometries and materials
       tower.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          if (child.geometry) child.geometry.dispose();
-          if (child.material) {
-            if (Array.isArray(child.material)) {
-              child.material.forEach(mat => mat.dispose());
-            } else {
-              child.material.dispose();
-            }
-          }
+        // Meshes (boxes, wires, etc.)
+        if ((child as any).isMesh) {
+          const mesh = child as THREE.Mesh;
+          (mesh.geometry as any)?.dispose?.();
+          const mat = mesh.material as any;
+          if (Array.isArray(mat)) mat.forEach((m: any) => { m.map?.dispose?.(); m.dispose?.(); });
+          else { mat?.map?.dispose?.(); mat?.dispose?.(); }
+        }
+        // Sprites (labels, NOT CONNECTED text)
+        else if ((child as any).isSprite) {
+          const sprite = child as THREE.Sprite;
+          const smat = sprite.material as any;
+          smat?.map?.dispose?.();
+          smat?.dispose?.();
+        }
+        // Lines and tube groups
+        else if ((child as any).isLine) {
+          const line = child as THREE.Line;
+          (line.geometry as any)?.dispose?.();
+          (line.material as any)?.dispose?.();
         }
       });
     });
     this.towers.clear();
     this.towerPositions.clear();
     this.towerHeights.clear();
+    this.occupiedPositions = [];
     this.clearLinks();
+  }
+
+  // Register a tower footprint as occupied
+  private registerOccupied(pos: THREE.Vector3): void {
+    this.occupiedPositions.push(new THREE.Vector2(pos.x, pos.z));
+  }
+
+  // Check whether a desired position overlaps existing towers within minDist
+  private isOverlappingPosition(pos: THREE.Vector3, minDist: number): boolean {
+    const minDistSq = minDist * minDist;
+    const px = pos.x, pz = pos.z;
+    for (const v of this.occupiedPositions) {
+      const dx = v.x - px;
+      const dz = v.y - pz;
+      if (dx * dx + dz * dz < minDistSq) return true;
+    }
+    return false;
+  }
+
+  // Find nearest free spot via spiral search starting from desired position
+  private findNonOverlappingPosition(desired: THREE.Vector3, minDist: number, maxAttempts: number = 96): THREE.Vector3 {
+    if (!this.isOverlappingPosition(desired, minDist)) return desired.clone();
+    const golden = 2.399963229728653; // golden-angle
+    for (let i = 1; i <= maxAttempts; i++) {
+      const r = minDist * (0.8 + Math.sqrt(i) * 0.6);
+      const a = i * golden;
+      const x = desired.x + Math.cos(a) * r;
+      const z = desired.z + Math.sin(a) * r;
+      const cand = new THREE.Vector3(x, desired.y, z);
+      if (!this.isOverlappingPosition(cand, minDist)) return cand;
+    }
+    // Fallback: return original desired if no space found
+    return desired.clone();
   }
 
   // Remove and dispose instanced link meshes
@@ -259,15 +307,14 @@ export class FilesystemVisualizer {
     // Traverse and dispose geometries/materials for all children
     this.linkGroup.children.slice().forEach(child => {
       this.linkGroup.remove(child);
-      child.traverse((obj) => {
-        const mesh = obj as unknown as THREE.Mesh;
-        if ((mesh as any).geometry) {
-          ((mesh as any).geometry as THREE.BufferGeometry).dispose?.();
-        }
-        const mat: any = (mesh as any).material;
-        if (mat) {
-          if (Array.isArray(mat)) mat.forEach((m: THREE.Material) => m.dispose?.());
-          else mat.dispose?.();
+      child.traverse((obj: any) => {
+        if (obj.isMesh || obj.isLine) {
+          obj.geometry?.dispose?.();
+          if (Array.isArray(obj.material)) obj.material.forEach((m: any) => { m.map?.dispose?.(); m.dispose?.(); });
+          else obj.material?.map?.dispose?.(), obj.material?.dispose?.();
+        } else if (obj.isSprite) {
+          obj.material?.map?.dispose?.();
+          obj.material?.dispose?.();
         }
       });
     });
@@ -284,22 +331,28 @@ export class FilesystemVisualizer {
     // Dispose old
     this.clearLinks();
 
-    // Core: solid cylinder; per-instance color via instanceColor + vertexColors
+    // Core: MeshBasicMaterial with per-instance vertex colors (lighting-independent)
     const coreRadius = 0.24;
     const coreGeom = new THREE.CylinderGeometry(coreRadius, coreRadius, 1, 4, 1, true);
-    const coreMat = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, vertexColors: true });
+    const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, vertexColors: true, side: THREE.DoubleSide });
     const coreInst = new THREE.InstancedMesh(coreGeom, coreMat, newCapacity);
     coreInst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     coreInst.frustumCulled = false;
-    coreInst.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(newCapacity * 3), 3);
-    // Halo: additive fresnel approximation using basic material with vertex colors
+    // Explicit instanceColor attribute for max compatibility
+    const coreColors = new Float32Array(newCapacity * 3);
+    (coreInst as any).instanceColor = new THREE.InstancedBufferAttribute(coreColors, 3);
+    coreInst.geometry.setAttribute('instanceColor', (coreInst as any).instanceColor);
+
+    // Halo: MeshBasicMaterial with additive blending and per-instance colors
     const haloRadius = coreRadius * 1.35;
     const haloGeom = new THREE.CylinderGeometry(haloRadius, haloRadius, 1, 4, 1, true);
-    const haloMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, vertexColors: true });
+    const haloMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.42, blending: THREE.AdditiveBlending, depthWrite: false, vertexColors: true, side: THREE.DoubleSide });
     const haloInst = new THREE.InstancedMesh(haloGeom, haloMat, newCapacity);
     haloInst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     haloInst.frustumCulled = false;
-    haloInst.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(newCapacity * 3), 3);
+    const haloColors = new Float32Array(newCapacity * 3);
+    (haloInst as any).instanceColor = new THREE.InstancedBufferAttribute(haloColors, 3);
+    haloInst.geometry.setAttribute('instanceColor', (haloInst as any).instanceColor);
 
     this.linkGroup.add(coreInst);
     this.linkGroup.add(haloInst);
@@ -344,7 +397,8 @@ export class FilesystemVisualizer {
       '.venv',
       'venv',
       '.idea',
-      '.vscode'
+      '.vscode',
+      '.internal'
     ];
     
     return excludedPatterns.some(pattern => name.includes(pattern));
@@ -375,32 +429,40 @@ export class FilesystemVisualizer {
     // Use calculated height instead of predefined height
     const height = calculatedHeight * activityMultiplier * scaleFactor;
     
-    // Create main tower
+    // Compute a minimum clearance based on tower scale and depth
+    const minClear = (depth === 0) ? 14 : Math.max(7, 8 - Math.min(depth, 5) + height * 0.02);
+    // Adjust desired position to avoid overlaps
+    const adjustedPos = this.findNonOverlappingPosition(position, minClear);
+    // Create main tower at the adjusted position
     const mainTower = depth === 0 
-      ? this.createTower(directory.name, position, height, colors.primary, colors.emissive)
-      : this.createSubTower(directory.name, position, height, colors.primary, colors.emissive);
+      ? this.createTower(directory.name, adjustedPos, height, colors.primary, colors.emissive)
+      : this.createSubTower(directory.name, adjustedPos, height, colors.primary, colors.emissive);
+    // Register occupancy for collision avoidance
+    this.registerOccupied(adjustedPos);
     
     // Store this tower's position with its full path
     const pathKey = directory.path || directory.name;
     this.towers.set(pathKey, mainTower);
-    this.towerPositions.set(pathKey, position.clone());
+    this.towerPositions.set(pathKey, adjustedPos.clone());
     this.towerHeights.set(pathKey, height);
     
     // Also store with simplified paths for easier matching
     const simplifiedPaths = [
       directory.name,
       pathKey.replace('subspace/', ''),
+      pathKey.replace(/^\//, ''),
       pathKey.split('/').slice(-2).join('/'),
       pathKey.split('/').slice(-3).join('/')
     ];
     simplifiedPaths.forEach(p => {
       if (p && !this.towerPositions.has(p)) {
-        this.towerPositions.set(p, position.clone());
+        this.towerPositions.set(p, adjustedPos.clone());
       }
       if (p && !this.towerHeights.has(p)) {
         this.towerHeights.set(p, height);
       }
     });
+    // No special '-home' aliases; personal folders are under 'personal/<cyber>'
     
     // Create sub-towers for children if enabled
     if (showSubDirectories && directory.children) {
@@ -409,7 +471,7 @@ export class FilesystemVisualizer {
         c.type === 'directory' && 
         !this.isExcludedDirectory(c.name)
       );
-      const subPositions = this.calculateSubDirectoryPositions(position, childDirectories.length, depth, childDirectories);
+      const subPositions = this.calculateSubDirectoryPositions(adjustedPos, childDirectories.length, depth, childDirectories);
       
       let subIndex = 0;
       directory.children.forEach((child) => {
@@ -417,14 +479,14 @@ export class FilesystemVisualizer {
             !this.isExcludedDirectory(child.name)) {
           // Recursively create tower for subdirectory
           const subTower = this.createDirectoryTower(child, subPositions[subIndex], true, depth + 1);
-          
           // Only connect if tower was actually created (not filtered)
           if (subTower.children.length > 0) {
-            // Determine child height from registry; fallback to a small elevation
+            // Determine child height and actual position after adjustment
             const childKey = child.path || child.name;
             const childHeight = this.getTowerHeight(childKey) ?? 5;
+            const childPos = this.getTowerPosition(childKey) || subTower.position.clone();
             // Connect sub-tower to main tower with a line (top-to-top)
-            this.createConnectionLine(position, subPositions[subIndex], height, colors.primary, childHeight);
+            this.createConnectionLine(adjustedPos, childPos, height, colors.primary, childHeight);
           }
           
           subIndex++;
@@ -433,7 +495,7 @@ export class FilesystemVisualizer {
       
       // Create file markers for files in this directory
       if (directory.children) {
-        this.createFilesForDirectory(directory, position);
+        this.createFilesForDirectory(directory, adjustedPos);
       }
     }
     
@@ -604,16 +666,20 @@ export class FilesystemVisualizer {
     sprite.position.y = height + 3;
     group.add(sprite);
     
+    // Adjust position to avoid overlap with existing towers
+    const adjustedPos = this.findNonOverlappingPosition(position, 8);
     // Position the tower
-    group.position.copy(position);
+    group.position.copy(adjustedPos);
     
     // Add to scene and store reference and position
     this.rootGroup.add(group);
     this.towers.set(cyberHome.name, group);
-    this.towerPositions.set(cyberHome.path, position);
-    this.towerPositions.set(cyberHome.name, position); // Also store by name
+    this.towerPositions.set(cyberHome.path, adjustedPos.clone());
+    this.towerPositions.set(cyberHome.name, adjustedPos.clone()); // Also store by name
     this.towerHeights.set(cyberHome.path, height);
     this.towerHeights.set(cyberHome.name, height);
+    // Register occupancy
+    this.registerOccupied(adjustedPos);
     
     return group;
   }
@@ -644,17 +710,16 @@ export class FilesystemVisualizer {
     const group = new THREE.Group();
     const coreRadius = 0.24;
     const coreGeom = new THREE.CylinderGeometry(coreRadius, coreRadius, 1, 4, 1, true);
-    const coreMat = new THREE.MeshStandardMaterial({
+    const coreMat = new THREE.MeshBasicMaterial({
       color,
-      emissive: new THREE.Color(color),
-      emissiveIntensity: 1.7,
       transparent: true,
-      opacity: 0.95
+      opacity: 0.95,
+      side: THREE.DoubleSide
     });
     const core = new THREE.Mesh(coreGeom, coreMat);
     const haloRadius = coreRadius * 1.35;
     const haloGeom = new THREE.CylinderGeometry(haloRadius, haloRadius, 1, 4, 1, true);
-    const haloMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false });
+    const haloMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.38, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
     const halo = new THREE.Mesh(haloGeom, haloMat);
     group.add(core);
     group.add(halo);
@@ -837,9 +902,27 @@ export class FilesystemVisualizer {
 
   // Get stored height for a given tower key/path using the same relaxed matching as getTowerPosition
   getTowerHeight(path: string): number | null {
+    // Normalize separators and strip Windows drive letters
+    path = path.replace(/\\/g, '/').replace(/^([A-Za-z]:)/, '');
     let h = this.towerHeights.get(path);
+    if (typeof h !== 'number') {
+      const ci = this.ciGet(this.towerHeights, path);
+      if (typeof ci === 'number') return ci;
+    }
     if (typeof h === 'number') return h;
     const pathParts = path.split('/').filter(p => p.length > 0);
+    // Special handling: map personal/<user>/... to <user>-home/...
+    const personalUser = pathParts[0] === 'personal' && pathParts.length >= 2 ? pathParts[1] : null;
+    const personalCandidates: string[] = [];
+    if (personalUser) {
+      const rest = pathParts.slice(2).join('/');
+      const root = `personal/${personalUser}`;
+      personalCandidates.push(root);
+      if (rest) personalCandidates.push(`${root}/${rest}`);
+      // Also try just the username alias
+      personalCandidates.push(personalUser);
+      if (rest) personalCandidates.push(`${personalUser}/${rest}`);
+    }
     const possible = [
       pathParts.join('/'),
       pathParts.length > 3 ? pathParts.slice(0, 4).join('/') : null,
@@ -847,11 +930,14 @@ export class FilesystemVisualizer {
       pathParts.length > 1 ? pathParts.slice(0, 2).join('/') : null,
       pathParts.slice(-2).join('/'),
       pathParts[pathParts.length - 1],
-      pathParts[0]
+      pathParts[0],
+      ...personalCandidates
     ].filter(Boolean) as string[];
     for (const key of possible) {
       h = this.towerHeights.get(key);
       if (typeof h === 'number') return h;
+      const ci = this.ciGet(this.towerHeights, key);
+      if (typeof ci === 'number') return ci;
     }
     return null;
   }
@@ -1000,10 +1086,10 @@ export class FilesystemVisualizer {
         }
       } else {
         // Normal tower animations
-        // Rotate wireframes slowly
-        const wireframe = tower.children[1];
-        if (wireframe) {
-          wireframe.rotation.y += 0.001;
+        // Rotate wireframes slowly (only if a mesh)
+        const wf = tower.children[1];
+        if (wf && (wf as any).isMesh) {
+          (wf as THREE.Mesh).rotation.y += 0.001;
         }
         
         // Subtle glow pulse on the top light
@@ -1055,14 +1141,31 @@ export class FilesystemVisualizer {
   
   // Get tower position for a given path - used by AgentManager
   getTowerPosition(path: string): THREE.Vector3 | null {
+    // Normalize separators and strip Windows drive letters
+    path = path.replace(/\\/g, '/').replace(/^([A-Za-z]:)/, '');
     // Try to find position by path
     let position = this.towerPositions.get(path);
     if (position) {
       return position.clone();
     }
+    const ciExact = this.ciGet(this.towerPositions, path);
+    if (ciExact) return (ciExact as THREE.Vector3).clone();
     
     // Try various path patterns, from most specific to least specific
     const pathParts = path.split('/').filter(p => p.length > 0);
+    // Special handling: map personal/<user>/... to <user>-home/...
+    const personalUser = pathParts[0] === 'personal' && pathParts.length >= 2 ? pathParts[1] : null;
+    const personalCandidates: string[] = [];
+    if (personalUser) {
+      const rest = pathParts.slice(2).join('/');
+      const root = `personal/${personalUser}`;
+      personalCandidates.push(root);
+      if (rest) personalCandidates.push(`${root}/${rest}`);
+      // Also try just the username alias
+      personalCandidates.push(personalUser);
+      if (rest) personalCandidates.push(`${personalUser}/${rest}`);
+    }
+    const tail = pathParts[pathParts.length - 1] || '';
     const possiblePaths = [
       pathParts.join('/'), // Full relative path (most specific)
       // Try intermediate paths for deeply nested locations
@@ -1070,8 +1173,9 @@ export class FilesystemVisualizer {
       pathParts.length > 2 ? pathParts.slice(0, 3).join('/') : null,
       pathParts.length > 1 ? pathParts.slice(0, 2).join('/') : null,
       pathParts.slice(-2).join('/'), // Last two parts
-      pathParts[pathParts.length - 1], // Last directory alone
-      pathParts[0] // First directory (least specific - fallback)
+      tail, // Last directory alone
+      pathParts[0], // First directory (least specific - fallback)
+      ...personalCandidates
     ].filter(p => p !== null);
     
     for (const possiblePath of possiblePaths) {
@@ -1080,6 +1184,8 @@ export class FilesystemVisualizer {
         // Found position - return without logging (too spammy)
         return position.clone();
       }
+      const ci = this.ciGet(this.towerPositions, possiblePath);
+      if (ci) return (ci as THREE.Vector3).clone();
     }
     
     // Only log if not found (for debugging)
@@ -1203,5 +1309,14 @@ export class FilesystemVisualizer {
     // Store reference
     this.towers.set(file.path, group);
     this.towerPositions.set(file.path, position);
+  }
+
+  // Case-insensitive map lookup helper
+  private ciGet<V>(map: Map<string, V>, key: string): V | undefined {
+    const target = key.toLowerCase();
+    for (const [k, v] of map) {
+      if (k.toLowerCase() === target) return v;
+    }
+    return undefined;
   }
 }

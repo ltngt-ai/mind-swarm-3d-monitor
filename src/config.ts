@@ -5,6 +5,7 @@ export interface Config {
   wsUrl: string;
   autoReconnect: boolean;
   reconnectInterval: number;
+  ttsUrl?: string; // optional external TTS endpoint
 }
 
 // Get server configuration from environment or URL parameters
@@ -53,6 +54,7 @@ export function getConfig(): Config {
   const apiOverride = urlParams.get('api'); // e.g. https://server:443/base
   const wsOverride = urlParams.get('ws');   // e.g. wss://server:443/path
   const basePath = urlParams.get('base') || ''; // prefix like /mind-swarm
+  const ttsUrl = urlParams.get('tts') || urlParams.get('ttsUrl') || undefined; // external TTS endpoint
 
   // Helper to normalize path joining
   const join = (a: string, b: string) => {
@@ -86,7 +88,8 @@ export function getConfig(): Config {
     apiUrl,
     wsUrl,
     autoReconnect: true,
-    reconnectInterval: 5000
+    reconnectInterval: 5000,
+    ttsUrl
   };
 }
 

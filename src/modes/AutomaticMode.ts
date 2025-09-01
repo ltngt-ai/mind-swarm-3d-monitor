@@ -100,7 +100,8 @@ export class AutomaticMode extends Mode {
         this.context.cyberInfoWindow.setDock('bottom-left');
         this.context.cyberInfoWindow.selectCyber(firstTarget);
         this.context.cyberInfoWindow.setFollowButtonVisible(false);
-        this.context.cyberInfoWindow.setActionBarVisible(false);
+        // Keep action bar visible so the TTS "Read" button is available
+        this.context.cyberInfoWindow.setActionBarVisible(true);
       }
     }
     
@@ -288,7 +289,8 @@ export class AutomaticMode extends Mode {
         if (this.context.cyberInfoWindow) {
           this.context.cyberInfoWindow.setDock('bottom-left');
           this.context.cyberInfoWindow.selectCyber(target);
-          this.context.cyberInfoWindow.setActionBarVisible(false);
+          // Keep action bar visible so TTS button is accessible
+          this.context.cyberInfoWindow.setActionBarVisible(true);
         }
         this.executeCyberFocusShot(target);
       }
