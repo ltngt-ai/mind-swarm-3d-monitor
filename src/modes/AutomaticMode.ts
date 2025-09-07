@@ -437,6 +437,9 @@ export class AutomaticMode extends Mode {
   }
 
   private createStreamOverlay(): void {
+    // Ensure global styles (keyframes) are present so animations run
+    this.ensureGlobalStyles();
+
     this.streamOverlay = document.createElement('div');
     this.streamOverlay.id = 'stream-overlay';
     this.streamOverlay.style.cssText = `
@@ -483,11 +486,6 @@ export class AutomaticMode extends Mode {
         </div>
       </div>
       <style>
-        @keyframes pulse {
-          0% { opacity: 1; }
-          50% { opacity: 0.5; }
-          100% { opacity: 1; }
-        }
         #bf-bars .bf-row { margin-bottom: 10px; }
         #bf-bars .bf-label { font-size: 22px; font-weight: bold; opacity: 0.85; margin-bottom: 6px; color: #cfffff; }
         #bf-bars .bf-bar { position: relative; width: 100%; height: 12px; background: rgba(0, 60, 120, 0.35); border: 1px solid rgba(0,255,255,0.35); border-radius: 6px; overflow: hidden; }
@@ -496,6 +494,21 @@ export class AutomaticMode extends Mode {
     `;
     
     document.body.appendChild(this.streamOverlay);
+  }
+
+  private ensureGlobalStyles(): void {
+    const styleId = 'automatic-mode-global-styles';
+    if (document.getElementById(styleId)) return;
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      @keyframes pulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.5; }
+        100% { opacity: 1; }
+      }
+    `;
+    document.head.appendChild(style);
   }
 
   private createActivityFeed(): void {

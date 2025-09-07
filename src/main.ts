@@ -54,18 +54,23 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
 
-// Post-processing for glow effects
+// Post-processing for glow effects (allow low-perf fallback for OBS/embedded)
+const urlParams = new URLSearchParams(window.location.search);
+const lowPerf = urlParams.get('lowperf') === '1' || urlParams.get('lowPerf') === '1';
+
 const composer = new EffectComposer(renderer);
 const renderPass = new RenderPass(scene, camera);
 composer.addPass(renderPass);
 
-const bloomPass = new UnrealBloomPass(
-  new THREE.Vector2(window.innerWidth, window.innerHeight),
-  1.0, // strength (more glow)
-  0.6, // radius (wider spill)
-  0.7 // threshold (bloom more highlights)
-);
-composer.addPass(bloomPass);
+if (!lowPerf) {
+  const bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    1.0,
+    0.6,
+    0.7
+  );
+  composer.addPass(bloomPass);
+}
 
 // Initialize camera controller
 const cameraController = new CameraController(camera, renderer);
@@ -399,31 +404,55 @@ window.addEventListener('resize', onWindowResize);
 
 // Clock for delta time
 const clock = new THREE.Clock();
+let lastRafAt = performance.now();
 
-// Animation loop
-function animate() {
-  requestAnimationFrame(animate);
-  
+function renderFrame() {
   const deltaTime = clock.getDelta();
-  
+
   // Update camera controller
   cameraController.update(deltaTime);
-  
+
   // Update current mode
   modeManager.update(deltaTime);
-  
+
   // Update core systems
   agentManager.update();
   gridSystem.update();
   filesystemViz.update();
-  
+
   // Render with post-processing
   composer.render();
+}
+
+// Animation loop
+function animate() {
+  // Always schedule the next frame first so errors below never stop the loop
+  requestAnimationFrame(animate);
+  try {
+    renderFrame();
+    lastRafAt = performance.now();
+  } catch (err) {
+    // Keep rendering even if one frame throws; log once per second max
+    if ((window as any).__lastAnimErrTime__ === undefined || Date.now() - (window as any).__lastAnimErrTime__ > 1000) {
+      console.error('Animation frame error:', err);
+      (window as any).__lastAnimErrTime__ = Date.now();
+    }
+  }
+}
+
+// Ensure the animation loop starts even if initialization awaits or fails early
+let animationStarted = false;
+function startAnimation() {
+  if (animationStarted) return;
+  animationStarted = true;
+  animate();
 }
 
 // Initialize everything
 async function initialize() {
   // Server selector UI removed for streamlined display
+  // Start animation loop immediately so the scene updates regardless of async init timing
+  startAnimation();
   
   // Initialize CyberInfoWindow with camera controller
   cyberInfoWindow = new CyberInfoWindow(wsClient, agentManager, cameraController);
@@ -462,9 +491,29 @@ async function initialize() {
     fetchStatusUpdate();
   }, 5000); // Check every 5 seconds
   
-  // Start animation loop
-  animate();
+  // Animation already started above (startAnimation)
 }
 
 // Start the application
+// Start animation defensively before any async work
+startAnimation();
 initialize();
+
+// Fallback for environments that throttle requestAnimationFrame (e.g., OBS Browser Source)
+const fallbackFps = Math.max(1, Math.min(60, parseInt(urlParams.get('fps') || '30', 10) || 30));
+const fallbackInterval = Math.round(1000 / fallbackFps);
+setInterval(() => {
+  // If RAF hasn't advanced recently, drive the render manually
+  if (performance.now() - lastRafAt > Math.max(500, fallbackInterval * 2)) {
+    try {
+      renderFrame();
+      lastRafAt = performance.now();
+    } catch (err) {
+      // Log sparingly
+      if ((window as any).__lastAnimErrTime__ === undefined || Date.now() - (window as any).__lastAnimErrTime__ > 1000) {
+        console.error('Fallback frame error:', err);
+        (window as any).__lastAnimErrTime__ = Date.now();
+      }
+    }
+  }
+}, fallbackInterval);

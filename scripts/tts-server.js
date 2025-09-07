@@ -91,7 +91,7 @@ const server = http.createServer(async (req, res) => {
       const tmpWav = tmp.replace(/\.aiff?$/i, '.wav');
       try {
         await speakToFile(safeText, tmp, voice, rate);
-        // Try to convert AIFF -> WAV for better Chromium/OBS compatibility
+      // Try to convert AIFF -> WAV for better Chromium/OBS compatibility
         try {
           await new Promise((resolve, reject) => {
             const proc = spawn('afconvert', ['-f', 'WAVE', '-d', 'LEI16', tmp, tmpWav]);
@@ -115,6 +115,32 @@ const server = http.createServer(async (req, res) => {
           'Cache-Control': 'no-store'
         });
         res.end(buf);
+      } catch (e) {
+        // Fallback: retry without custom voice/rate if the specified voice is unavailable
+        try {
+          await speakToFile(safeText, tmp);
+        } catch (e2) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: String(e2 && e2.message || e2) }));
+        }
+        // proceed to serve the generated file (conversion attempted below)
+        try {
+          const tmpWav2 = tmp.replace(/\.aiff?$/i, '.wav');
+          await new Promise((resolve, reject) => {
+            const proc = spawn('afconvert', ['-f', 'WAVE', '-d', 'LEI16', tmp, tmpWav2]);
+            let stderr = '';
+            proc.stderr.on('data', d => (stderr += d.toString()));
+            proc.on('close', code => { if (code === 0) resolve(); else resolve(); });
+            proc.on('error', () => resolve());
+          });
+        } finally {
+          let outPath = fs.existsSync(tmp.replace(/\.aiff?$/i, '.wav')) ? tmp.replace(/\.aiff?$/i, '.wav') : tmp;
+          const buf = fs.readFileSync(outPath);
+          const ctype = outPath.endsWith('.wav') ? 'audio/wav' : 'audio/aiff';
+          res.writeHead(200, { 'Content-Type': ctype, 'Content-Length': buf.length, 'Cache-Control': 'no-store' });
+          res.end(buf);
+        }
+        return;
       } finally {
         try { fs.existsSync(tmp) && fs.unlinkSync(tmp); } catch {}
         try { fs.existsSync(tmpWav) && fs.unlinkSync(tmpWav); } catch {}
