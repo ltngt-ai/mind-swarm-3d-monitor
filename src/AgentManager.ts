@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ThoughtBubble } from './ThoughtBubble';
+import type { ThoughtBubble } from './ThoughtBubble';
 
 interface ThoughtHistoryEntry {
   thought: string;
@@ -25,6 +25,7 @@ interface AgentData {
   stateLight: THREE.PointLight;
   namePlate: THREE.Sprite;
   thoughtBubble?: ThoughtBubble;
+  bioSprite?: THREE.Sprite;
   thoughtHistory: ThoughtHistoryEntry[];
   connectionLine?: THREE.Object3D;
 }
@@ -125,6 +126,7 @@ export class AgentManager {
       targetPosition,
       stateLight: light,
       namePlate: sprite,
+      bioSprite: undefined,
       thoughtHistory: []
     };
   }
@@ -321,6 +323,12 @@ export class AgentManager {
       if (agent.thoughtBubble) {
         this.scene.remove(agent.thoughtBubble.getMesh());
         agent.thoughtBubble.dispose();
+      }
+      // Remove bio sprite if exists
+      if (agent.bioSprite) {
+        const mat = agent.bioSprite.material as THREE.SpriteMaterial;
+        mat.map?.dispose();
+        mat.dispose();
       }
       
       // Remove connection line if exists
@@ -543,13 +551,11 @@ export class AgentManager {
     const agent = this.agents.get(name);
     if (!agent) return;
     agent.bio = { ...(agent.bio || {}), ...bio };
-    // If a bubble is visible, refresh it with current thought + stats
-    if (agent.thoughtBubble) {
-      const bubbleText = this.composeBubbleText(agent);
-      agent.thoughtBubble.updateText(bubbleText);
-    }
+    // Refresh compact biofeedback sprite above the agent
+    this.updateBioSprite(agent);
   }
 
+  // Thought bubbles are removed; maintain history and pulse only.
   showThought(agentName: string, thought: string) {
     const agent = this.agents.get(agentName);
     if (!agent) return;
@@ -562,32 +568,101 @@ export class AgentManager {
     if (agent.thoughtHistory.length > 20) {
       agent.thoughtHistory.pop();
     }
-    
-    const bubbleText = this.composeBubbleText(agent, thought);
-
-    if (agent.thoughtBubble) {
-      // Update existing bubble
-      agent.thoughtBubble.updateText(bubbleText);
-      agent.thoughtBubble.updatePosition(agent.mesh.position);
-    } else {
-      // Create new bubble
-      agent.thoughtBubble = new ThoughtBubble(bubbleText, agent.mesh.position);
-      this.scene.add(agent.thoughtBubble.getMesh());
-    }
-    
-    // Also pulse the agent to show activity
+    // Ensure bio sprite is up to date
+    this.updateBioSprite(agent);
+    // Pulse the agent to show activity
     this.pulseAgent(agent);
   }
 
-  private composeBubbleText(agent: AgentData, newThought?: string): string {
-    const latestThought = newThought ?? agent.thoughtHistory[0]?.thought ?? '';
+  // No longer compose thought bubbles; reflections are shown in CyberInfoWindow.
+  
+  private updateBioSprite(agent: AgentData) {
+    // Ensure any legacy thought bubble is removed
+    if (agent.thoughtBubble) {
+      this.scene.remove(agent.thoughtBubble.getMesh());
+      agent.thoughtBubble.dispose();
+      agent.thoughtBubble = undefined;
+    }
+    // Draw a bigger HUD with five horizontal bars (B/T/D/R/M)
     const b = agent.bio || {};
     const fmt = (n?: number) => (typeof n === 'number' ? Math.round(Math.max(0, Math.min(100, n))) : 0);
-    const stats = `B${fmt(b.boredom)} T${fmt(b.tiredness)} D${fmt(b.duty)}\nR${fmt(b.restlessness)} M${fmt(b.memory_pressure)}`;
-    if (latestThought) {
-      return `${latestThought}\n${stats}`;
+
+    const canvas = document.createElement('canvas');
+    // Larger canvas for higher on-screen fidelity (extra padding to avoid clipping)
+    canvas.width = 768;
+    canvas.height = 224;
+    const ctx = canvas.getContext('2d')!;
+
+    // Background
+    ctx.fillStyle = 'rgba(0, 17, 34, 0.82)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Border
+    ctx.strokeStyle = '#00ffff';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+
+    // Bar config
+    const labels = ['Boredom', 'Tiredness', 'Duty', 'Restlessness', 'Memory'];
+    const values = [
+      fmt(b.boredom),
+      fmt(b.tiredness),
+      fmt(b.duty),
+      fmt(b.restlessness),
+      fmt(b.memory_pressure)
+    ];
+    const colors = ['#00e5ff', '#ffb300', '#00ff80', '#ff4081', '#b388ff'];
+    const labelLeft = 20;
+    const barLeft = 170; // leave room for full labels
+    const barRight = canvas.width - 30;
+    const barWidth = barRight - barLeft;
+    const top = 28;
+    const rowH = 28; // thicker bars; keep padding below
+    ctx.font = 'bold 24px Courier New';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+
+    for (let i = 0; i < labels.length; i++) {
+      const y = top + i * (rowH + 12); // final bar stays within border
+      // Label (full word)
+      ctx.fillStyle = '#cfffff';
+      ctx.fillText(labels[i], labelLeft, y + rowH / 2);
+
+      // Track
+      ctx.fillStyle = 'rgba(0, 255, 255, 0.12)';
+      ctx.fillRect(barLeft, y, barWidth, rowH);
+      // Value
+      const w = Math.max(0, Math.min(100, values[i])) / 100 * barWidth;
+      ctx.fillStyle = colors[i];
+      ctx.fillRect(barLeft, y, w, rowH);
+      // Value text (right side)
+      ctx.fillStyle = '#eaffff';
+      ctx.textAlign = 'right';
+      ctx.fillText(String(values[i]).padStart(3, ' '), barRight, y + rowH / 2);
+      ctx.textAlign = 'left';
     }
-    return stats;
+
+    if (!agent.bioSprite) {
+      const texture = new THREE.CanvasTexture(canvas);
+      const mat = new THREE.SpriteMaterial({ map: texture, transparent: true });
+      const sprite = new THREE.Sprite(mat);
+      // Bigger on-screen size while preserving aspect ratio
+      const worldW = 22;
+      const worldH = worldW * (canvas.height / canvas.width);
+      sprite.scale.set(worldW, worldH, 1);
+      sprite.position.y = 11; // a bit higher for the larger HUD
+      agent.mesh.add(sprite);
+      agent.bioSprite = sprite;
+    } else {
+      const mat = agent.bioSprite.material as THREE.SpriteMaterial;
+      if (mat.map) mat.map.dispose();
+      mat.map = new THREE.CanvasTexture(canvas);
+      mat.needsUpdate = true;
+      // Ensure scale reflects the larger canvas
+      const worldW = 22;
+      const worldH = worldW * (canvas.height / canvas.width);
+      agent.bioSprite.scale.set(worldW, worldH, 1);
+      agent.bioSprite.position.y = 11;
+    }
   }
   
   getAgentThoughtHistory(agentName: string): ThoughtHistoryEntry[] {
@@ -701,11 +776,6 @@ export class AgentManager {
       agent.mesh.position.y = agent.position.y + Math.sin(Date.now() * 0.001 + agent.position.x) * bobAmount;
       
       // Connection line is created/updated above when locationPosition is available
-      
-      // Update thought bubble position to follow agent
-      if (agent.thoughtBubble) {
-        agent.thoughtBubble.updatePosition(agent.mesh.position);
-      }
     });
   }
 }
