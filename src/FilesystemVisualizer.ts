@@ -31,13 +31,12 @@ export class FilesystemVisualizer {
   // Instanced link meshes (filesystem tower connections)
   private linkCoreInst?: THREE.InstancedMesh;
   private linkHaloInst?: THREE.InstancedMesh;
-  private linkCapacity: number = 0;
-  private linkCount: number = 0;
   private linkDummy: THREE.Object3D = new THREE.Object3D();
-  // Prefer stability/brightness: disable instancing by default
-  private useInstancing: boolean = false;
   // Group to contain all link-related objects (instanced or fallback tubes)
   private linkGroup: THREE.Group = new THREE.Group();
+  // City grid parameters
+  private CITY_CELL_SIZE: number = 14; // size of a block footprint (footprint of towers)
+  private CITY_STREET: number = 8;     // width of streets between blocks
   
   // Color scheme for different directory types
   private directoryColors: DirectoryColors = {
@@ -165,8 +164,7 @@ export class FilesystemVisualizer {
     
     // Clear existing towers
     this.clearTowers();
-    // Reset link instance count
-    this.linkCount = 0;
+    // Instanced links disabled; using simple tubes
     
     // Create grid directory structure (main visualization)
     if (this.filesystemStructure.grid) {
@@ -189,15 +187,7 @@ export class FilesystemVisualizer {
       });
     }
 
-    // Finalize instanced links
-    if (this.linkCoreInst && this.linkHaloInst) {
-      (this.linkCoreInst as any).count = this.linkCount;
-      (this.linkHaloInst as any).count = this.linkCount;
-      this.linkCoreInst.instanceMatrix.needsUpdate = true;
-      this.linkHaloInst.instanceMatrix.needsUpdate = true;
-      if (this.linkCoreInst.instanceColor) this.linkCoreInst.instanceColor.needsUpdate = true as any;
-      if (this.linkHaloInst.instanceColor) this.linkHaloInst.instanceColor.needsUpdate = true as any;
-    }
+    // No instanced link finalization needed
   }
   
   // Calculate positions for cyber home directories in a circle behind the grid
@@ -327,74 +317,12 @@ export class FilesystemVisualizer {
         }
       });
     });
-    this.linkCapacity = 0;
-    this.linkCount = 0;
+    // No instanced link counters to reset
   }
 
-  // Ensure instanced meshes exist and have at least the given capacity
-  private ensureLinkCapacity(minCapacity: number): void {
-    if (this.linkCapacity >= minCapacity && this.linkCoreInst && this.linkHaloInst) return;
-    // Grow capacity (double strategy)
-    const newCapacity = Math.max(minCapacity, Math.max(32, this.linkCapacity * 2));
+  // Removed instanced link capacity handling (using simple tube segments instead)
 
-    // Dispose old
-    this.clearLinks();
-
-    // Core: MeshBasicMaterial with per-instance vertex colors (lighting-independent)
-    const coreRadius = 0.24;
-    const coreGeom = new THREE.CylinderGeometry(coreRadius, coreRadius, 1, 4, 1, true);
-    const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, vertexColors: true, side: THREE.DoubleSide });
-    const coreInst = new THREE.InstancedMesh(coreGeom, coreMat, newCapacity);
-    coreInst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    coreInst.frustumCulled = false;
-    // Explicit instanceColor attribute for max compatibility
-    const coreColors = new Float32Array(newCapacity * 3);
-    (coreInst as any).instanceColor = new THREE.InstancedBufferAttribute(coreColors, 3);
-    coreInst.geometry.setAttribute('instanceColor', (coreInst as any).instanceColor);
-
-    // Halo: MeshBasicMaterial with additive blending and per-instance colors
-    const haloRadius = coreRadius * 1.35;
-    const haloGeom = new THREE.CylinderGeometry(haloRadius, haloRadius, 1, 4, 1, true);
-    const haloMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.42, blending: THREE.AdditiveBlending, depthWrite: false, vertexColors: true, side: THREE.DoubleSide });
-    const haloInst = new THREE.InstancedMesh(haloGeom, haloMat, newCapacity);
-    haloInst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    haloInst.frustumCulled = false;
-    const haloColors = new Float32Array(newCapacity * 3);
-    (haloInst as any).instanceColor = new THREE.InstancedBufferAttribute(haloColors, 3);
-    haloInst.geometry.setAttribute('instanceColor', (haloInst as any).instanceColor);
-
-    this.linkGroup.add(coreInst);
-    this.linkGroup.add(haloInst);
-    this.linkCoreInst = coreInst;
-    this.linkHaloInst = haloInst;
-    this.linkCapacity = newCapacity;
-    this.linkCount = 0;
-  }
-
-  // Add a link instance from start to end with given color
-  private addLinkInstance(start: THREE.Vector3, end: THREE.Vector3, color: number): void {
-    // Ensure capacity
-    this.ensureLinkCapacity(this.linkCount + 1);
-    if (!this.linkCoreInst || !this.linkHaloInst) return;
-
-    const dir = new THREE.Vector3().subVectors(end, start);
-    const length = dir.length();
-    if (length < 0.0001) return;
-
-    const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
-    this.linkDummy.position.copy(mid);
-    const yAxis = new THREE.Vector3(0, 1, 0);
-    this.linkDummy.quaternion.setFromUnitVectors(yAxis, dir.normalize());
-    this.linkDummy.scale.set(1, length, 1);
-    this.linkDummy.updateMatrix();
-
-    const idx = this.linkCount++;
-    this.linkCoreInst.setMatrixAt(idx, this.linkDummy.matrix);
-    this.linkHaloInst.setMatrixAt(idx, this.linkDummy.matrix);
-    const c = new THREE.Color(color);
-    if (this.linkCoreInst.instanceColor) this.linkCoreInst.setColorAt(idx, c);
-    if (this.linkHaloInst.instanceColor) this.linkHaloInst.setColorAt(idx, c);
-  }
+  // Removed per-instance link builder path in favor of simpler orthogonal tubes
   
   // Check if a directory should be excluded from visualization
   private isExcludedDirectory(name: string): boolean {
@@ -519,25 +447,42 @@ export class FilesystemVisualizer {
     children?: FilesystemNode[]
   ): THREE.Vector3[] {
     const positions: THREE.Vector3[] = [];
-    
-    // Calculate radius based on the complexity of children
-    let maxChildComplexity = 1;
-    if (children) {
-      maxChildComplexity = Math.max(...children.map(child => this.calculateDirectoryComplexity(child)));
-    }
-    
-    // Base radius that grows with depth to avoid collision, plus extra space for complex children
-    const baseRadius = Math.max(15, 20 + depth * 5);
-    const complexityBonus = Math.max(0, (maxChildComplexity - 1) * 8);
-    const radius = baseRadius + complexityBonus;
-    
+
+    if (childCount <= 0) return positions;
+
+    // Estimate footprint radius for each child based on subtree complexity
+    const radii: number[] = [];
+    let maxR = 0;
     for (let i = 0; i < childCount; i++) {
-      const angle = (i / childCount) * Math.PI * 2;
-      const x = parentPosition.x + Math.cos(angle) * radius;
-      const z = parentPosition.z + Math.sin(angle) * radius;
+      const child = children && children[i] ? children[i] : undefined;
+      const complexity = child ? this.calculateDirectoryComplexity(child) : 1;
+      // Base footprint grows with depth and complexity
+      const r = (8 + depth * 4) + complexity * 3; // tweakable constants
+      radii.push(r);
+      if (r > maxR) maxR = r;
+    }
+
+    // Cell size adapts to the largest subtree at this level
+    const scale = Math.max(0.7, 1 - depth * 0.06);
+    const street = this.CITY_STREET * scale;
+    const cell = Math.max(this.CITY_CELL_SIZE * scale, 2 * maxR + street);
+
+    // Arrange children in a near-square grid (uniform cell sized by maxR)
+    const cols = Math.ceil(Math.sqrt(childCount));
+    const rows = Math.ceil(childCount / cols);
+    const width = cols * cell + (cols - 1) * street;
+    const height = rows * cell + (rows - 1) * street;
+    const originX = parentPosition.x - width / 2 + cell / 2;
+    const originZ = parentPosition.z - height / 2 + cell / 2;
+
+    for (let i = 0; i < childCount; i++) {
+      const row = Math.floor(i / cols);
+      const col = i % cols;
+      const x = originX + col * (cell + street);
+      const z = originZ + row * (cell + street);
       positions.push(new THREE.Vector3(x, 0, z));
     }
-    
+
     return positions;
   }
   
@@ -684,14 +629,11 @@ export class FilesystemVisualizer {
     color: number,
     childHeight?: number
   ): void {
+    // Straight line tube from parent top to child top (clean look)
     const start = new THREE.Vector3(parentPos.x, parentHeight, parentPos.z);
     const endY = typeof childHeight === 'number' ? childHeight : 5;
     const end = new THREE.Vector3(childPos.x, endY, childPos.z);
-    if (this.useInstancing) {
-      this.addLinkInstance(start, end, color);
-    } else {
-      this.createConnectionTube(start, end, color);
-    }
+    this.createConnectionTube(start, end, color);
   }
 
   // Fallback: create a single glowy tube (core + halo) between two points

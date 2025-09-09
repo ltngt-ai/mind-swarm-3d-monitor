@@ -3,6 +3,8 @@ import { AgentManager } from '../AgentManager';
 import { CameraController, CameraMode } from '../camera/CameraController';
 import { config } from '../config';
 
+export type InfoWindowVariant = 'automatic' | 'interactive';
+
 export interface CycleData {
   cycle_number: number;
   metadata?: {
@@ -24,6 +26,7 @@ export class CyberInfoWindow {
   private wsClient: WebSocketClient;
   private agentManager: AgentManager;
   private cameraController: CameraController | null = null;
+  private variant: InfoWindowVariant = 'interactive';
   
   private selectedCyber: string | null = null;
   private currentCycle: number = 0;  // Will be set when we get actual data
@@ -58,14 +61,15 @@ export class CyberInfoWindow {
   private autoSpeakTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly autoSpeakDelayMs = 1200;
   
-  constructor(wsClient: WebSocketClient, agentManager: AgentManager, cameraController?: CameraController) {
+  constructor(wsClient: WebSocketClient, agentManager: AgentManager, cameraController?: CameraController, options?: { variant?: InfoWindowVariant }) {
     this.wsClient = wsClient;
     this.agentManager = agentManager;
     this.cameraController = cameraController || null;
+    this.variant = options?.variant || 'interactive';
     
     // Create the window container
     this.container = document.createElement('div');
-    this.container.className = 'cyber-info-window';
+    this.container.className = `cyber-info-window ${this.variant === 'automatic' ? 'variant-automatic' : 'variant-interactive'}`;
     this.container.style.cssText = `
       position: fixed;
       right: 20px;
@@ -88,6 +92,8 @@ export class CyberInfoWindow {
     `;
     
     this.setupWindow();
+    // Adjust initial UI based on variant
+    this.applyVariantDefaults();
     document.body.appendChild(this.container);
     this.setupAudioEnablers();
     
@@ -282,7 +288,7 @@ export class CyberInfoWindow {
       <!-- Stage Selector -->
       <div class="stage-selector" style="
         padding: 10px;
-        display: none; /* hidden in automatic mode (show reflections only) */
+        display: none; /* will be toggled based on variant */
         gap: 5px;
         flex-wrap: wrap;
         border-bottom: 1px solid #0080ff;
@@ -475,6 +481,40 @@ export class CyberInfoWindow {
         this.selectStage(stage);
       });
     });
+  }
+
+  // Apply variant-specific defaults (visibility, layout toggles)
+  private applyVariantDefaults() {
+    // Toggle stage selector visibility
+    const stageSelector = this.container.querySelector('.stage-selector') as HTMLElement | null;
+    if (stageSelector) {
+      stageSelector.style.display = this.variant === 'interactive' ? 'flex' : 'none';
+    }
+
+    const actionBar = this.container.querySelector('.action-buttons') as HTMLElement | null;
+    const btnFollow = this.container.querySelector('#btn-follow') as HTMLButtonElement | null;
+    const btnMessage = this.container.querySelector('#btn-message') as HTMLButtonElement | null;
+    const btnRefresh = this.container.querySelector('#btn-refresh') as HTMLButtonElement | null;
+    const btnTts = this.container.querySelector('#btn-tts') as HTMLButtonElement | null;
+    const btnTtsTest = this.container.querySelector('#btn-tts-test') as HTMLButtonElement | null;
+
+    if (this.variant === 'automatic') {
+      // Keep a minimal surface for broadcast view
+      if (btnFollow) btnFollow.style.display = 'none';
+      if (btnMessage) btnMessage.style.display = 'none';
+      if (btnRefresh) btnRefresh.style.display = 'none';
+      if (btnTts) btnTts.style.display = '';
+      if (btnTtsTest) btnTtsTest.style.display = '';
+      if (actionBar) actionBar.style.display = 'flex';
+    } else {
+      // Full controls for interactive mode
+      if (btnFollow) btnFollow.style.display = '';
+      if (btnMessage) btnMessage.style.display = '';
+      if (btnRefresh) btnRefresh.style.display = '';
+      if (btnTts) btnTts.style.display = '';
+      if (btnTtsTest) btnTtsTest.style.display = '';
+      if (actionBar) actionBar.style.display = 'flex';
+    }
   }
 
   // Prepare auto-play audio by waiting for a user gesture and voices load

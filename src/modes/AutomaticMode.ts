@@ -30,7 +30,7 @@ export class AutomaticMode extends Mode {
   
   // UI elements
   private streamOverlay?: HTMLDivElement;
-  private activityFeed?: HTMLDivElement;
+  // Activity feed removed
   // Safety: force a camera switch at this interval even if a long shot was queued
   private forceSwitchInterval: number = 90000; // 90 seconds hard cap
 
@@ -42,8 +42,7 @@ export class AutomaticMode extends Mode {
   protected setupUI(): void {
     // Create streaming overlay
     this.createStreamOverlay();
-    // Create activity feed panel (used by addActivityEvent)
-    this.createActivityFeed();
+    // Activity feed panel disabled/removed
     // Stats panel disabled for a cleaner view
     
     // Add GUI controls
@@ -97,12 +96,12 @@ export class AutomaticMode extends Mode {
     const firstTarget = this.pickTargetCyber();
     if (firstTarget) {
       this.queueShot({ type: 'cyber-focus', duration: this.minShotDuration, target: firstTarget });
-      if (this.context.cyberInfoWindow) {
-        this.context.cyberInfoWindow.setDock('bottom-left');
-        this.context.cyberInfoWindow.selectCyber(firstTarget);
-        this.context.cyberInfoWindow.setFollowButtonVisible(false);
+      if (this.context.autoInfoWindow) {
+        this.context.autoInfoWindow.setDock('bottom-left');
+        this.context.autoInfoWindow.selectCyber(firstTarget);
+        this.context.autoInfoWindow.setFollowButtonVisible(false);
         // Keep action bar visible so the TTS "Read" button is available
-        this.context.cyberInfoWindow.setActionBarVisible(true);
+        this.context.autoInfoWindow.setActionBarVisible(true);
       }
     }
     
@@ -114,7 +113,7 @@ export class AutomaticMode extends Mode {
     
     // Show streaming UI
     if (this.streamOverlay) this.streamOverlay.style.display = 'block';
-    if (this.activityFeed) this.activityFeed.style.display = 'block';
+    // Activity feed hidden (feature disabled)
     
     this.showNotification('Automatic mode activated - Following cybers', 'info');
   }
@@ -127,11 +126,11 @@ export class AutomaticMode extends Mode {
     
     // Hide streaming UI
     if (this.streamOverlay) this.streamOverlay.style.display = 'none';
-    if (this.activityFeed) this.activityFeed.style.display = 'none';
-    if (this.context.cyberInfoWindow) {
-      this.context.cyberInfoWindow.hide();
-      this.context.cyberInfoWindow.setFollowButtonVisible(true);
-      this.context.cyberInfoWindow.setActionBarVisible(true);
+    // Activity feed already disabled
+    if (this.context.autoInfoWindow) {
+      this.context.autoInfoWindow.hide();
+      this.context.autoInfoWindow.setFollowButtonVisible(true);
+      this.context.autoInfoWindow.setActionBarVisible(true);
     }
     
     // Clear shot queue
@@ -287,19 +286,19 @@ export class AutomaticMode extends Mode {
         // Record actual target so UI shows the correct name
         shot.target = target;
         if (this.currentShot) this.currentShot.target = target;
-        if (this.context.cyberInfoWindow) {
-          this.context.cyberInfoWindow.setDock('bottom-left');
-          this.context.cyberInfoWindow.selectCyber(target);
+        if (this.context.autoInfoWindow) {
+          this.context.autoInfoWindow.setDock('bottom-left');
+          this.context.autoInfoWindow.selectCyber(target);
           // Keep action bar visible so TTS button is accessible
-          this.context.cyberInfoWindow.setActionBarVisible(true);
+          this.context.autoInfoWindow.setActionBarVisible(true);
         }
         this.executeCyberFocusShot(target);
       }
     } else if (shot.type === 'overview') {
       // Switch to an overview shot
-      if (this.context.cyberInfoWindow) {
+      if (this.context.autoInfoWindow) {
         // Keep overlay docked; no specific cyber selected
-        this.context.cyberInfoWindow.setDock('bottom-left');
+        this.context.autoInfoWindow.setDock('bottom-left');
       }
       this.executeOverviewShot();
     }
@@ -403,8 +402,7 @@ export class AutomaticMode extends Mode {
     const cutoff = Date.now() - 60000; // Last minute
     this.recentEvents = this.recentEvents.filter(e => e.timestamp > cutoff);
     
-    // Update activity feed
-    this.updateActivityFeed();
+    // Activity feed removed
   }
 
   private updateActivityMetrics(): void {
@@ -486,34 +484,7 @@ export class AutomaticMode extends Mode {
     document.head.appendChild(style);
   }
 
-  private createActivityFeed(): void {
-    this.activityFeed = document.createElement('div');
-    this.activityFeed.id = 'activity-feed';
-    this.activityFeed.style.cssText = `
-      position: fixed;
-      bottom: 80px;
-      right: 20px;
-      background: rgba(0, 20, 40, 0.7);
-      border: 1px solid #0080ff;
-      border-radius: 10px;
-      padding: 15px;
-      color: #00ffff;
-      font-family: 'Courier New', monospace;
-      font-size: 11px;
-      max-width: 300px;
-      max-height: 200px;
-      overflow-y: auto;
-      display: none;
-      z-index: 500;
-    `;
-    
-    this.activityFeed.innerHTML = `
-      <h4 style="margin: 0 0 10px 0; font-size: 12px;">Activity Feed</h4>
-      <div id="feed-content"></div>
-    `;
-    
-    document.body.appendChild(this.activityFeed);
-  }
+  // createActivityFeed removed
 
   // createStatsPanel removed for simplified UI
 
@@ -589,20 +560,7 @@ export class AutomaticMode extends Mode {
   
   // Removed unused helper (getShotDisplayName)
 
-  private updateActivityFeed(): void {
-    if (!this.activityFeed) return;
-    
-    const content = this.activityFeed.querySelector('#feed-content');
-    if (!content) return;
-    
-    const recentEvents = this.recentEvents.slice(-5).reverse();
-    content.innerHTML = recentEvents.map(event => {
-      const time = new Date(event.timestamp).toLocaleTimeString();
-      return `<div style="margin: 2px 0; opacity: 0.8;">
-        [${time}] ${event.cyber || 'System'}: ${event.type}
-      </div>`;
-    }).join('');
-  }
+  // updateActivityFeed removed
 
   // updateStatsPanel removed for simplified UI
 

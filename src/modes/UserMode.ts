@@ -231,10 +231,10 @@ export class UserMode extends Mode {
         this.context.cameraController.setTarget(agent.mesh);
         this.showNotification(`Following ${this.selectedCyber}`, 'info');
         // Dock info window bottom-left and select the cyber
-        if (this.context.cyberInfoWindow) {
-          this.context.cyberInfoWindow.setDock('bottom-left');
-          this.context.cyberInfoWindow.selectCyber(this.selectedCyber);
-          this.context.cyberInfoWindow.show();
+        if (this.context.userInfoWindow) {
+          this.context.userInfoWindow.setDock('bottom-left');
+          this.context.userInfoWindow.selectCyber(this.selectedCyber);
+          this.context.userInfoWindow.show();
         }
       }
     } else {
@@ -288,8 +288,8 @@ export class UserMode extends Mode {
     this.selectedCyber = null;
     this.setFollowMode(false);
     this.updateCyberInfo();
-    if (this.context.cyberInfoWindow) {
-      this.context.cyberInfoWindow.hide();
+    if (this.context.userInfoWindow) {
+      this.context.userInfoWindow.hide();
     }
   }
 

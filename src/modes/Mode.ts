@@ -18,7 +18,9 @@ export interface ModeContext {
   gridSystem: GridSystem;
   wsClient: WebSocketClient;
   gui: GUI;
-  cyberInfoWindow?: CyberInfoWindow;
+  // Separate panels for automatic vs interactive modes
+  autoInfoWindow?: CyberInfoWindow;
+  userInfoWindow?: CyberInfoWindow;
 }
 
 export abstract class Mode {

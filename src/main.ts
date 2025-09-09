@@ -15,6 +15,8 @@ import { config } from './config';
 import { ModeManager, AppMode } from './modes/ModeManager';
 import { ModeContext } from './modes/Mode';
 import { AutomaticMode } from './modes/AutomaticMode';
+import { UserMode } from './modes/UserMode';
+import { DeveloperMode } from './modes/DeveloperMode';
 
 // Camera system
 import { CameraController } from './camera/CameraController';
@@ -23,7 +25,7 @@ import { CameraController } from './camera/CameraController';
 import { eventBus, Events } from './utils/EventBus';
 
 // UI Components
-import { CyberInfoWindow } from './ui/CyberInfoWindow';
+import { CyberInfoWindow, InfoWindowVariant } from './ui/CyberInfoWindow';
 
 // Types
 import { 
@@ -128,6 +130,8 @@ const modeContext: ModeContext = {
 // Initialize mode manager and register modes
 const modeManager = new ModeManager(modeContext);
 modeManager.registerMode(AppMode.AUTOMATIC, new AutomaticMode(modeContext));
+modeManager.registerMode(AppMode.USER, new UserMode(modeContext));
+modeManager.registerMode(AppMode.DEVELOPER, new DeveloperMode(modeContext));
 
 // Handle WebSocket events
 wsClient.on('agent_created', (data: AgentCreatedEvent) => {
@@ -192,6 +196,18 @@ wsClient.on('file_activity', (data: FileActivityEvent) => {
 wsClient.on('biofeedback', (data: any) => {
   console.log('Biofeedback event received:', JSON.stringify(data));
   if (data && data.cyber) {
+    // Ensure the agent exists even if we only receive biofeedback
+    let agent = agentManager.getAgentData(data.cyber);
+    if (!agent) {
+      console.log(`Biofeedback for unknown agent ${data.cyber} — creating.`);
+      agentManager.addAgent(data.cyber, {
+        type: 'general',
+        state: 'unknown',
+        premium: false,
+        current_location: undefined
+      });
+      agent = agentManager.getAgentData(data.cyber);
+    }
     const bioData = {
       boredom: data.boredom,
       tiredness: data.tiredness,
@@ -240,17 +256,31 @@ wsClient.on('agent_location_changed', (data: any) => {
 wsClient.on('status_update', (data: any) => {
   if (data.Cybers) {
     Object.entries(data.Cybers).forEach(([name, cyberData]: [string, any]) => {
-      // Check if location has changed
-      const agent = agentManager.getAgentData(name);
-      if (agent && cyberData.current_location && agent.currentLocation !== cyberData.current_location) {
+      let agent = agentManager.getAgentData(name);
+      // Create agent if missing to handle servers that only send status_update
+      if (!agent) {
+        console.log(`Status update for unknown agent ${name} — creating.`);
+        agentManager.addAgent(name, {
+          type: cyberData.type || cyberData.cyber_type || 'general',
+          state: (cyberData.state || 'unknown').toLowerCase(),
+          premium: !!(cyberData.premium || (cyberData.config as any)?.use_premium),
+          current_location: cyberData.current_location
+        });
+        agent = agentManager.getAgentData(name);
+      }
+
+      if (!agent) return; // Safety
+
+      // Apply location/state updates
+      if (cyberData.current_location && agent.currentLocation !== cyberData.current_location) {
         console.log(`Agent ${name} location updated to: ${cyberData.current_location}`);
         agentManager.updateAgentLocation(name, cyberData.current_location);
       }
-      
-      // Update other properties
-      if (cyberData.state && agent && agent.state !== cyberData.state.toLowerCase()) {
-        agentManager.updateAgentState(name, cyberData.state.toLowerCase());
+
+      if (cyberData.state && agent.state !== (cyberData.state || '').toLowerCase()) {
+        agentManager.updateAgentState(name, (cyberData.state || '').toLowerCase());
       }
+
       // Update biofeedback if available
       agentManager.updateAgentBiofeedback(name, {
         boredom: cyberData.boredom,
@@ -398,8 +428,7 @@ async function fetchInitialStatus() {
 // Connect WebSocket
 wsClient.connect();
 
-// Create info window instance
-let cyberInfoWindow: CyberInfoWindow;
+// Info windows managed per mode (auto vs interactive)
 
 // Old UI status elements removed - using CyberInfoWindow instead
 
@@ -497,13 +526,18 @@ async function initialize() {
   // Start animation loop immediately so the scene updates regardless of async init timing
   startAnimation();
   
-  // Initialize CyberInfoWindow with camera controller
-  cyberInfoWindow = new CyberInfoWindow(wsClient, agentManager, cameraController);
-  // Expose to modes via context so Automatic mode can control it
-  (modeContext as any).cyberInfoWindow = cyberInfoWindow;
+  // Initialize separate info windows for automatic and interactive modes
+  const autoInfoWindow = new CyberInfoWindow(wsClient, agentManager, cameraController, { variant: 'automatic' as InfoWindowVariant });
+  const userInfoWindow = new CyberInfoWindow(wsClient, agentManager, cameraController, { variant: 'interactive' as InfoWindowVariant });
+  // Expose to modes via context so modes can control their dedicated panels
+  (modeContext as any).autoInfoWindow = autoInfoWindow;
+  (modeContext as any).userInfoWindow = userInfoWindow;
   
   // Initialize mode manager with default mode
   await modeManager.initialize(AppMode.AUTOMATIC);
+
+  // Create a minimal on-screen mode selector for quick switching
+  createModeSelectorUI();
   
   // Add click handler for selecting cybers
   renderer.domElement.addEventListener('click', (event) => {
@@ -518,12 +552,17 @@ async function initialize() {
     const selectedAgent = agentManager.getAgentAtPosition(raycaster);
     if (selectedAgent) {
       agentManager.selectAgent(selectedAgent.name);
-      cyberInfoWindow.selectCyber(selectedAgent.name);
       // Narrow WS subscription to the selected cyber to reduce noise
       wsClient.subscribe([selectedAgent.name]);
+      // Only show interactive panel outside of automatic mode
+      const current = modeManager.getCurrentModeType();
+      if (current && current !== AppMode.AUTOMATIC) {
+        userInfoWindow.selectCyber(selectedAgent.name);
+        userInfoWindow.show();
+      }
     } else {
       agentManager.selectAgent(null);
-      cyberInfoWindow.hide();
+      userInfoWindow.hide();
       // Restore broad subscription
       wsClient.subscribe(['*']);
     }
@@ -560,3 +599,97 @@ setInterval(() => {
     }
   }
 }, fallbackInterval);
+
+// Simple Mode Selector UI (bottom-right)
+// Mode selector inactivity handling
+let __modeUiEl: HTMLDivElement | null = null;
+let __modeUiHideTimer: number | null = null;
+
+function createModeSelectorUI() {
+  const id = 'mode-selector';
+  let el = document.getElementById(id) as HTMLDivElement | null;
+  if (el) el.remove();
+
+  el = document.createElement('div');
+  el.id = id;
+  el.style.cssText = `
+    position: fixed;
+    right: 14px;
+    bottom: 14px;
+    display: flex;
+    gap: 6px;
+    background: rgba(0, 20, 40, 0.8);
+    border: 1px solid #00ffff;
+    border-radius: 8px;
+    padding: 6px;
+    z-index: 1200;
+    font-family: 'Courier New', monospace;
+    transition: opacity 0.35s ease, transform 0.35s ease;
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  `;
+
+  const mkBtn = (label: string, mode: AppMode) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.style.cssText = `
+      background: rgba(0, 80, 160, 0.6);
+      color: #cfffff;
+      border: 1px solid #00ffff;
+      border-radius: 4px;
+      padding: 4px 8px;
+      cursor: pointer;
+    `;
+    b.onclick = () => modeManager.switchMode(mode);
+    b.dataset.mode = mode;
+    return b;
+  };
+
+  const btnAuto = mkBtn('Auto (1)', AppMode.AUTOMATIC);
+  const btnUser = mkBtn('User (2)', AppMode.USER);
+  const btnDev = mkBtn('Dev (3)', AppMode.DEVELOPER);
+  el.append(btnAuto, btnUser, btnDev);
+  document.body.appendChild(el);
+  __modeUiEl = el;
+
+  const markActive = () => {
+    const current = modeManager.getCurrentModeType();
+    [btnAuto, btnUser, btnDev].forEach((b) => {
+      if (b.dataset.mode === current) {
+        b.style.background = 'rgba(0, 200, 160, 0.7)';
+        b.style.color = '#001822';
+      } else {
+        b.style.background = 'rgba(0, 80, 160, 0.6)';
+        b.style.color = '#cfffff';
+      }
+    });
+  };
+  markActive();
+  eventBus.on(Events.MODE_CHANGED, () => { markActive(); showModeSelector(); });
+
+  // Inactivity fade-out after 30s without input
+  const scheduleHide = () => {
+    if (__modeUiHideTimer) window.clearTimeout(__modeUiHideTimer);
+    __modeUiHideTimer = window.setTimeout(() => hideModeSelector(), 30000);
+  };
+  const onActivity = () => { showModeSelector(); scheduleHide(); };
+  ['mousemove', 'pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(evt => {
+    window.addEventListener(evt, onActivity, { passive: true });
+  });
+  scheduleHide();
+}
+
+function showModeSelector() {
+  if (!__modeUiEl) return;
+  __modeUiEl.style.opacity = '1';
+  __modeUiEl.style.transform = 'translateY(0)';
+  __modeUiEl.style.pointerEvents = 'auto';
+}
+
+function hideModeSelector() {
+  if (!__modeUiEl) return;
+  __modeUiEl.style.opacity = '0';
+  __modeUiEl.style.transform = 'translateY(8px)';
+  __modeUiEl.style.pointerEvents = 'none';
+}
