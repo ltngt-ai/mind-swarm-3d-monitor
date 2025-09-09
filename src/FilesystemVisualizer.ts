@@ -40,10 +40,14 @@ export class FilesystemVisualizer {
   private highwayGroup: THREE.Group = new THREE.Group();
   private cyberHomePositions: THREE.Vector3[] = [];
   private gridPrimaryPositions: THREE.Vector3[] = [];
-  private gridRootPosition: THREE.Vector3 | null = null;
   private trunkAngle: number | null = null; // direction from grid root to homes centroid
   // Smooth transitions
   private prevPositions: Map<string, THREE.Vector3> = new Map();
+  // Highway anchors by key for live tracking
+  private cyberHomeKeys: string[] = [];
+  private gridPrimaryKeys: string[] = [];
+  private gridRootKey: string | null = null;
+  private highwayAnchorSum: number = 0;
   // City grid parameters removed (using circle packing)
   
   // Color scheme for different directory types
@@ -182,7 +186,10 @@ export class FilesystemVisualizer {
     // Reset cached positions for highways
     this.cyberHomePositions = [];
     this.gridPrimaryPositions = [];
-    this.gridRootPosition = null;
+    // No longer track static positions; use live keys
+    this.cyberHomeKeys = [];
+    this.gridPrimaryKeys = [];
+    this.gridRootKey = null;
     // Instanced links disabled; using simple tubes
     
     // Create grid directory structure (main visualization)
@@ -204,12 +211,13 @@ export class FilesystemVisualizer {
         const towerName = cyberHome.name; // show raw name
         const group = this.createCyberHomeTower(cyberHome, cyberPositions[index], towerName);
         this.cyberHomePositions.push(group.position.clone());
+        this.cyberHomeKeys.push(cyberHome.name);
       });
     }
 
     // No instanced link finalization needed
 
-    // Build highways to frame major areas
+    // Build highways to frame major areas (from live positions)
     this.createHighways();
   }
   
@@ -425,10 +433,11 @@ export class FilesystemVisualizer {
 
     // Track positions for highway layout
     if (depth === 0 && (directory.name.toLowerCase() === 'grid' || (directory.path || '').replace(/^\//,'').startsWith('grid'))) {
-      this.gridRootPosition = adjustedPos.clone();
+      this.gridRootKey = pathKey;
     }
     if (depth === 1 && ((directory.path || '').replace(/^\//,'').startsWith('grid/'))) {
       this.gridPrimaryPositions.push(adjustedPos.clone());
+      this.gridPrimaryKeys.push(pathKey);
     }
     
     // Also store with simplified paths for easier matching
@@ -796,54 +805,62 @@ export class FilesystemVisualizer {
   }
 
   private createHighways(): void {
+    this.rebuildHighwaysFromLive();
+  }
+
+  private rebuildHighwaysFromLive(): void {
+    // Compute movement signature
+    let sum = 0;
+    const grid = this.gridRootKey ? this.towers.get(this.gridRootKey) : null;
+    if (grid) sum += grid.position.x + grid.position.z;
+    for (const k of this.cyberHomeKeys) { const g = this.towers.get(k); if (g) sum += g.position.x + g.position.z; }
+    for (const k of this.gridPrimaryKeys) { const g = this.towers.get(k); if (g) sum += g.position.x + g.position.z; }
+    if (Math.abs(sum - this.highwayAnchorSum) < 0.001 && this.highwayGroup.children.length > 0) return;
+    this.highwayAnchorSum = sum;
+
     this.clearHighways();
-    // Highway A: a broad boulevard connecting Grid root to the centroid of Cyber homes
-    let trunkStart: THREE.Vector3 | null = null;
-    let trunkEnd: THREE.Vector3 | null = null;
-    if (this.gridRootPosition && this.cyberHomePositions.length > 0) {
-      const centroid = this.computeCentroid(this.cyberHomePositions);
-      trunkStart = this.gridRootPosition.clone();
-      trunkEnd = centroid.clone();
-      this.trunkAngle = Math.atan2(trunkEnd.z - trunkStart.z, trunkEnd.x - trunkStart.x);
-      this.addHighwayStrip(trunkStart, trunkEnd, 14, 0x00aaff);
-    } else {
-      this.trunkAngle = null;
-    }
-
-    // Highway B: a rectangular loop around Grid's primary folders with off-ramps to each
-    if (this.gridPrimaryPositions.length > 0 && this.gridRootPosition) {
-      const center = this.gridRootPosition.clone();
-      // Determine arc radius from primaries
-      const distances = this.gridPrimaryPositions.map(p => p.distanceTo(center));
-      const rArc = Math.max(18, Math.min(...distances) - 6);
-      const meanAway = (this.trunkAngle ?? 0) + Math.PI; // opposite of trunk
-      const start = meanAway - Math.PI / 2;
-      const end = meanAway + Math.PI / 2;
-      const segments = 20;
-      const color = 0x00ffaa;
-      const lane = 8;
-      let prev = new THREE.Vector3(center.x + Math.cos(start) * rArc, 0.03, center.z + Math.sin(start) * rArc);
-      for (let i = 1; i <= segments; i++) {
-        const t = start + (i / segments) * (end - start);
-        const cur = new THREE.Vector3(center.x + Math.cos(t) * rArc, 0.03, center.z + Math.sin(t) * rArc);
-        this.addHighwayStrip(prev.clone(), cur.clone(), lane, color);
-        prev = cur;
-      }
-      // Radial off-ramps from arc to each primary
-      for (const p of this.gridPrimaryPositions) {
-        const ang = Math.atan2(p.z - center.z, p.x - center.x);
-        const clamped = Math.min(end, Math.max(start, ang));
-        const arcPt = new THREE.Vector3(center.x + Math.cos(clamped) * rArc, 0.03, center.z + Math.sin(clamped) * rArc);
-        this.addHighwayStrip(arcPt, new THREE.Vector3(p.x, 0.03, p.z), 5.5, color);
+    const gridPos = grid ? grid.position.clone() : null;
+    const homes = this.cyberHomeKeys.map(k => this.towers.get(k)?.position.clone()).filter(Boolean) as THREE.Vector3[];
+    if (gridPos && homes.length > 0) {
+      const centroid = this.computeCentroid(homes);
+      this.trunkAngle = Math.atan2(centroid.z - gridPos.z, centroid.x - gridPos.x);
+      this.addHighwayStrip(gridPos, centroid, 14, 0x00aaff, 2.0);
+      // Offramps to each home
+      for (const h of homes) {
+        const proj = this.nearestPointOnSegment(gridPos, centroid, h);
+        // Extra overlap so the ramp visually fuses with the trunk
+        this.addHighwayStrip(proj, new THREE.Vector3(h.x, 0.03, h.z), 4.5, 0x00aaff, 2.0);
+        // Junction pad to guarantee a visible connection
+        this.addHighwayJunction(proj, 5.0, 0x00aaff);
       }
     }
 
-    // Off-ramps from trunk to each Cyber home
-    if (trunkStart && trunkEnd && this.cyberHomePositions.length > 0) {
-      for (const h of this.cyberHomePositions) {
-        const proj = this.nearestPointOnSegment(trunkStart, trunkEnd, h);
-        this.addHighwayStrip(proj, new THREE.Vector3(h.x, 0.03, h.z), 4.5, 0x00aaff);
-      }
+    if (gridPos && this.gridPrimaryKeys.length > 0) {
+      const prims = this.gridPrimaryKeys.map(k => this.towers.get(k)?.position.clone()).filter(Boolean) as THREE.Vector3[];
+      if (prims.length > 0) {
+        const distances = prims.map(p => p.distanceTo(gridPos));
+        const rArc = Math.max(18, Math.min(...distances) - 6);
+        const meanAway = (this.trunkAngle ?? 0) + Math.PI;
+        const start = meanAway - Math.PI / 2;
+        const end = meanAway + Math.PI / 2;
+        const segments = 20;
+        const color = 0x00ffaa;
+        const lane = 8;
+        let prev = new THREE.Vector3(gridPos.x + Math.cos(start) * rArc, 0.03, gridPos.z + Math.sin(start) * rArc);
+        for (let i = 1; i <= segments; i++) {
+          const t = start + (i / segments) * (end - start);
+          const cur = new THREE.Vector3(gridPos.x + Math.cos(t) * rArc, 0.03, gridPos.z + Math.sin(t) * rArc);
+          this.addHighwayStrip(prev.clone(), cur.clone(), lane, color, 1.5);
+          prev = cur;
+        }
+        for (const p of prims) {
+          const ang = Math.atan2(p.z - gridPos.z, p.x - gridPos.x);
+          const clamped = Math.min(end, Math.max(start, ang));
+          const arcPt = new THREE.Vector3(gridPos.x + Math.cos(clamped) * rArc, 0.03, gridPos.z + Math.sin(clamped) * rArc);
+          this.addHighwayStrip(arcPt, new THREE.Vector3(p.x, 0.03, p.z), 5.5, color, 1.5);
+          this.addHighwayJunction(arcPt, 5.5, color);
+        }
+  }
     }
   }
 
@@ -856,44 +873,57 @@ export class FilesystemVisualizer {
     return c;
   }
 
-  private addHighwayStrip(start: THREE.Vector3, end: THREE.Vector3, width: number, color: number) {
+  private addHighwayStrip(start: THREE.Vector3, end: THREE.Vector3, width: number, color: number, overlap: number = 0) {
     // Wide glowing strip with edge lines, all coplanar with ground
     const dir = new THREE.Vector3().subVectors(end, start);
     const len = dir.length();
     if (len < 0.001) return;
 
-    const center = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+    // Extend the segment a little so neighbors overlap and appear connected
+    const n = dir.clone().normalize();
+    const ext = Math.max(0, overlap);
+    const startEx = start.clone().sub(n.clone().multiplyScalar(ext));
+    const endEx = end.clone().add(n.clone().multiplyScalar(ext));
+    const center = new THREE.Vector3().addVectors(startEx, endEx).multiplyScalar(0.5);
+    const extLen = startEx.distanceTo(endEx);
     const y = 0.03;
     center.y = y; start.y = y; end.y = y;
-    const angle = Math.atan2(end.z - start.z, end.x - start.x);
+    // angle not used (quaternion alignment below)
 
     const group = new THREE.Group();
     group.position.copy(center);
-    group.rotation.x = -Math.PI / 2; // lay local XY onto ground XZ
-    // Rotate around local Z after laying flat so the strip stays coplanar with ground
-    group.rotation.z = angle;
+    // Use a very thin box to avoid plane orientation ambiguities
+    const boxGeom = new THREE.BoxGeometry(extLen, 0.02, width);
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1.0, depthWrite: false });
+    const strip = new THREE.Mesh(boxGeom, mat);
+    group.add(strip);
 
-    const planeGeom = new THREE.PlaneGeometry(len, width, 1, 1);
-    // Solid-looking highway that doesn't occlude towers: keep depthWrite off
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, blending: THREE.NormalBlending, depthWrite: false, side: THREE.DoubleSide });
-    const plane = new THREE.Mesh(planeGeom, mat);
-    group.add(plane);
-
-    // Edge lines along local X at +/- half width (local Y is width axis before rotation)
-    const half = width / 2;
-    const positions = new Float32Array([
-      -len/2, -half, 0,   len/2, -half, 0,
-      -len/2,  half, 0,   len/2,  half, 0,
-    ]);
+    // Edge lines along the two long sides
+    const halfW = width / 2;
+    const halfL = extLen / 2;
     const edgeGeom = new THREE.BufferGeometry();
-    edgeGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    edgeGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+      -halfL, 0.011, -halfW,  halfL, 0.011, -halfW,
+      -halfL, 0.011,  halfW,  halfL, 0.011,  halfW,
+    ]), 3));
     const edgeMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
     const edges = new THREE.LineSegments(edgeGeom, edgeMat);
     group.add(edges);
 
-    // Lift the group slightly above ground and add to highways
-    group.position.y = y + 0.001; // lift slightly to avoid z-fighting without occluding
+    // Orient strip so its local +X axis aligns with ground-plane direction
+    const dirFlat = new THREE.Vector3(endEx.x - startEx.x, 0, endEx.z - startEx.z).normalize();
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), dirFlat);
+    group.quaternion.copy(q);
+    group.position.y = y + 0.001;
     this.highwayGroup.add(group);
+  }
+
+  private addHighwayJunction(center: THREE.Vector3, size: number, color: number) {
+    const padGeom = new THREE.BoxGeometry(size, 0.025, size);
+    const padMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1.0, depthWrite: false });
+    const pad = new THREE.Mesh(padGeom, padMat);
+    pad.position.set(center.x, 0.031, center.z);
+    this.highwayGroup.add(pad);
   }
 
   // Removed rectangular helper (now using semicircle for grid)
@@ -1287,6 +1317,8 @@ export class FilesystemVisualizer {
 
   update() {
     this.time += 0.01;
+    // Rebuild highways if anchors moved (keeps connections during transitions)
+    this.rebuildHighwaysFromLive();
     
     // Animate towers
     this.towers.forEach((tower, name) => {
