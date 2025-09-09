@@ -25,8 +25,10 @@ export class FilesystemVisualizer {
   private apiUrl: string = config.apiUrl;
   // Track visual heights per tower key to precisely anchor links
   private towerHeights: Map<string, number> = new Map();
-  // Track occupied x/z positions to avoid overlapping towers
-  private occupiedPositions: Array<THREE.Vector2> = [];
+  // Subtree footprint radii (circle packing)
+  private circleRadii: Map<string, number> = new Map();
+  // Track occupied discs (center + radius) to avoid overlapping subtrees/towers
+  private occupiedPositions: Array<{ p: THREE.Vector2; r: number }> = [];
   
   // Instanced link meshes (filesystem tower connections)
   private linkCoreInst?: THREE.InstancedMesh;
@@ -34,9 +36,13 @@ export class FilesystemVisualizer {
   private linkDummy: THREE.Object3D = new THREE.Object3D();
   // Group to contain all link-related objects (instanced or fallback tubes)
   private linkGroup: THREE.Group = new THREE.Group();
-  // City grid parameters
-  private CITY_CELL_SIZE: number = 14; // size of a block footprint (footprint of towers)
-  private CITY_STREET: number = 8;     // width of streets between blocks
+  // Highways: glowing rectangles to segment major areas
+  private highwayGroup: THREE.Group = new THREE.Group();
+  private cyberHomePositions: THREE.Vector3[] = [];
+  private gridPrimaryPositions: THREE.Vector3[] = [];
+  private gridRootPosition: THREE.Vector3 | null = null;
+  private trunkAngle: number | null = null; // direction from grid root to homes centroid
+  // City grid parameters removed (using circle packing)
   
   // Color scheme for different directory types
   private directoryColors: DirectoryColors = {
@@ -56,6 +62,8 @@ export class FilesystemVisualizer {
     this.scene.add(this.rootGroup);
     // Contain all links in a dedicated group so we can clear them reliably
     this.rootGroup.add(this.linkGroup);
+    // Highways layer under links and agents
+    this.rootGroup.add(this.highwayGroup);
     
     // Base geometries for towers and files
     this.towerGeometry = new THREE.BoxGeometry(4, 1, 4);
@@ -164,6 +172,10 @@ export class FilesystemVisualizer {
     
     // Clear existing towers
     this.clearTowers();
+    // Reset cached positions for highways
+    this.cyberHomePositions = [];
+    this.gridPrimaryPositions = [];
+    this.gridRootPosition = null;
     // Instanced links disabled; using simple tubes
     
     // Create grid directory structure (main visualization)
@@ -183,11 +195,15 @@ export class FilesystemVisualizer {
       const cyberPositions = this.calculateCyberHomePositions(this.filesystemStructure.cyber_homes.length);
       this.filesystemStructure.cyber_homes.forEach((cyberHome, index) => {
         const towerName = cyberHome.name; // show raw name
-        this.createCyberHomeTower(cyberHome, cyberPositions[index], towerName);
+        const group = this.createCyberHomeTower(cyberHome, cyberPositions[index], towerName);
+        this.cyberHomePositions.push(group.position.clone());
       });
     }
 
     // No instanced link finalization needed
+
+    // Build highways to frame major areas
+    this.createHighways();
   }
   
   // Calculate positions for cyber home directories in a circle behind the grid
@@ -248,22 +264,24 @@ export class FilesystemVisualizer {
     this.towerPositions.clear();
     this.towerHeights.clear();
     this.occupiedPositions = [];
+    this.circleRadii.clear();
     this.clearLinks();
+    this.clearHighways();
   }
 
-  // Register a tower footprint as occupied
-  private registerOccupied(pos: THREE.Vector3): void {
-    this.occupiedPositions.push(new THREE.Vector2(pos.x, pos.z));
+  // Register a tower/subtree footprint as occupied
+  private registerOccupied(pos: THREE.Vector3, radius: number = 0): void {
+    this.occupiedPositions.push({ p: new THREE.Vector2(pos.x, pos.z), r: Math.max(0, radius) });
   }
 
   // Check whether a desired position overlaps existing towers within minDist
   private isOverlappingPosition(pos: THREE.Vector3, minDist: number): boolean {
-    const minDistSq = minDist * minDist;
     const px = pos.x, pz = pos.z;
     for (const v of this.occupiedPositions) {
-      const dx = v.x - px;
-      const dz = v.y - pz;
-      if (dx * dx + dz * dz < minDistSq) return true;
+      const dx = v.p.x - px;
+      const dz = v.p.y - pz;
+      const rr = minDist + (v.r || 0);
+      if (dx * dx + dz * dz < rr * rr) return true;
     }
     return false;
   }
@@ -366,22 +384,36 @@ export class FilesystemVisualizer {
     // Use calculated height instead of predefined height
     const height = calculatedHeight * activityMultiplier * scaleFactor;
     
-    // Compute a minimum clearance based on tower scale and depth
-    const minClear = (depth === 0) ? 14 : Math.max(7, 8 - Math.min(depth, 5) + height * 0.02);
+    // Compute a minimum clearance based on tower scale and depth (more generous to reduce overlap)
+    const isTop = depth === 0;
+    const minClear = isTop ? 14 : Math.max(8, 8 - Math.min(depth, 6) + height * 0.04);
     // Adjust desired position to avoid overlaps
     const adjustedPos = this.findNonOverlappingPosition(position, minClear);
     // Create main tower at the adjusted position
     const mainTower = depth === 0 
       ? this.createTower(directory.name, adjustedPos, height, colors.primary, colors.emissive)
       : this.createSubTower(directory.name, adjustedPos, height, colors.primary, colors.emissive);
-    // Register occupancy for collision avoidance
-    this.registerOccupied(adjustedPos);
+    // Register occupancy is handled after computing subtree radius below
     
     // Store this tower's position with its full path
     const pathKey = directory.path || directory.name;
     this.towers.set(pathKey, mainTower);
     this.towerPositions.set(pathKey, adjustedPos.clone());
     this.towerHeights.set(pathKey, height);
+
+    // Compute and store subtree radius for circle packing and global occupancy
+    const parentRadius = this.getCircleRadiusForNode(directory, depth);
+    this.circleRadii.set(pathKey, parentRadius);
+    // Register occupied area for this subtree to discourage overlaps across major areas
+    this.registerOccupied(adjustedPos, parentRadius);
+
+    // Track positions for highway layout
+    if (depth === 0 && (directory.name.toLowerCase() === 'grid' || (directory.path || '').replace(/^\//,'').startsWith('grid'))) {
+      this.gridRootPosition = adjustedPos.clone();
+    }
+    if (depth === 1 && ((directory.path || '').replace(/^\//,'').startsWith('grid/'))) {
+      this.gridPrimaryPositions.push(adjustedPos.clone());
+    }
     
     // Also store with simplified paths for easier matching
     const simplifiedPaths = [
@@ -408,7 +440,7 @@ export class FilesystemVisualizer {
         c.type === 'directory' && 
         !this.isExcludedDirectory(c.name)
       );
-      const subPositions = this.calculateSubDirectoryPositions(adjustedPos, childDirectories.length, depth, childDirectories);
+      const subPositions = this.calculateSubDirectoryPositions(adjustedPos, childDirectories.length, depth, childDirectories, pathKey);
       
       let subIndex = 0;
       directory.children.forEach((child) => {
@@ -444,48 +476,158 @@ export class FilesystemVisualizer {
     parentPosition: THREE.Vector3,
     childCount: number,
     depth: number = 0,
-    children?: FilesystemNode[]
+    children?: FilesystemNode[],
+    parentPathOrName?: string
   ): THREE.Vector3[] {
     const positions: THREE.Vector3[] = [];
 
     if (childCount <= 0) return positions;
 
-    // Estimate footprint radius for each child based on subtree complexity
-    const radii: number[] = [];
-    let maxR = 0;
-    for (let i = 0; i < childCount; i++) {
-      const child = children && children[i] ? children[i] : undefined;
-      const complexity = child ? this.calculateDirectoryComplexity(child) : 1;
-      // Base footprint grows with depth and complexity
-      const r = (8 + depth * 4) + complexity * 3; // tweakable constants
-      radii.push(r);
-      if (r > maxR) maxR = r;
+    // Pre-compute child subtree radii
+    const childNodes: FilesystemNode[] = (children || []).filter(c => c && c.type === 'directory');
+    const childRadii: number[] = childNodes.map(n => this.getCircleRadiusForNode(n, depth + 1));
+
+    // If placing Grid's primary children (depth 0 parent named 'grid'),
+    // distribute them along a rectangular loop (like buildings off a highway).
+    const parentId = (parentPathOrName || '').toLowerCase();
+    if (depth === 0 && (parentId === 'grid' || parentId.endsWith('/grid'))) {
+      // Place direct children of grid on a semicircle away from trunk
+      const center = parentPosition;
+      const meanAway = ((this.trunkAngle ?? 0) + Math.PI);
+      const start = meanAway - Math.PI / 2;
+      const end = meanAway + Math.PI / 2;
+      const rBase = Math.max(16, Math.max(...childRadii) + 10);
+      const placed: { x: number; z: number; r: number }[] = [];
+      for (let i = 0; i < childCount; i++) {
+        const t = (i + 0.5) / childCount;
+        const ang = start + t * (end - start);
+        const r = (childRadii[i] || 8) + rBase;
+        let x = center.x + Math.cos(ang) * r;
+        let z = center.z + Math.sin(ang) * r;
+        // Resolve overlaps by moving slightly along +radial
+        const dir = new THREE.Vector3(Math.cos(ang), 0, Math.sin(ang));
+        let guard = 0;
+        while (guard++ < 40 && placed.some(p => {
+          const dx = p.x - x; const dz = p.z - z; const need = p.r + (childRadii[i]||8) + 4;
+          return dx*dx + dz*dz < need*need;
+        })) {
+          x += dir.x * 2;
+          z += dir.z * 2;
+        }
+        placed.push({ x, z, r: childRadii[i] || 8 });
+        positions.push(new THREE.Vector3(x, 0, z));
+      }
+      return positions;
     }
 
-    // Cell size adapts to the largest subtree at this level
-    const scale = Math.max(0.7, 1 - depth * 0.06);
-    const street = this.CITY_STREET * scale;
-    const cell = Math.max(this.CITY_CELL_SIZE * scale, 2 * maxR + street);
-
-    // Arrange children in a near-square grid (uniform cell sized by maxR)
-    const cols = Math.ceil(Math.sqrt(childCount));
-    const rows = Math.ceil(childCount / cols);
-    const width = cols * cell + (cols - 1) * street;
-    const height = rows * cell + (rows - 1) * street;
-    const originX = parentPosition.x - width / 2 + cell / 2;
-    const originZ = parentPosition.z - height / 2 + cell / 2;
-
-    for (let i = 0; i < childCount; i++) {
-      const row = Math.floor(i / cols);
-      const col = i % cols;
-      const x = originX + col * (cell + street);
-      const z = originZ + row * (cell + street);
-      positions.push(new THREE.Vector3(x, 0, z));
-    }
-
+    // Generic: pack circles greedily inside a parent circle
+    const parentKey = (parentPathOrName || '').toString();
+    const parentRadius = this.circleRadii.get(parentKey) || this.estimateParentRadius(childNodes, depth);
+    const packed = this.packCircles(parentPosition, parentRadius * 0.9, childRadii);
+    packed.forEach(p => positions.push(new THREE.Vector3(p.x, 0, p.z)));
     return positions;
   }
   
+  // Estimate subtree weight and radii for circle packing
+  private computeSubtreeWeight(node: FilesystemNode): number {
+    if (!node) return 1;
+    if (!node.children || node.children.length === 0) return 1;
+    let w = 1; // base weight for the node itself
+    for (const c of node.children) {
+      if (c.type === 'directory') w += this.computeSubtreeWeight(c) * 1.0;
+      else w += 0.25; // light weight for files
+    }
+    return w;
+  }
+
+  private getCircleRadiusForNode(node: FilesystemNode, depth: number): number {
+    const key = (node.path || node.name);
+    const existing = this.circleRadii.get(key);
+    if (existing) return existing;
+    const weight = this.computeSubtreeWeight(node);
+    const base = 6 + depth * 4;
+    const r = base + Math.sqrt(Math.max(1, weight)) * 3.5; // tighter scaling
+    this.circleRadii.set(key, r);
+    return r;
+  }
+
+  private estimateParentRadius(children: FilesystemNode[], depth: number): number {
+    const total = children.reduce((acc, n) => acc + this.computeSubtreeWeight(n), 0);
+    const base = 16 + depth * 6;
+    return base + Math.sqrt(Math.max(1, total)) * 4.5;
+  }
+
+  private packCircles(center: THREE.Vector3, parentRadius: number, radii: number[]): { x: number; z: number }[] {
+    // Robust greedy packer with a minimum ring radius to avoid inner clustering
+    const placed: { x: number; z: number; r: number }[] = [];
+    const order = radii.map((r, i) => ({ r, i })).sort((a, b) => b.r - a.r);
+    const golden = 2.399963229728653;
+    let margin = 3;
+    const innerFrac = 0.45; // keep children at least 45% out from the center
+
+    for (let idx = 0; idx < order.length; idx++) {
+      const r = order[idx].r;
+      let done = false;
+
+      // Try spiral samples from inner to outer radii
+      for (let t = 0; t < 200 && !done; t++) {
+        const minR = Math.max(parentRadius * innerFrac, r + margin + 1);
+        const maxR = Math.max(minR, parentRadius - r - margin);
+        const rr = Math.min(maxR, minR + Math.sqrt(t) * 3.5);
+        if (rr <= 0) continue;
+        const ang = t * golden;
+        const x = center.x + Math.cos(ang) * rr;
+        const z = center.z + Math.sin(ang) * rr;
+        if (Math.hypot(x - center.x, z - center.z) + r + margin > parentRadius) continue;
+        if (!placed.some(p => {
+          const dx = p.x - x; const dz = p.z - z; const need = p.r + r + margin;
+          return dx*dx + dz*dz < need*need;
+        })) {
+          // If too close to center, nudge outward to at least 50% of parent radius
+          let nx = x, nz = z;
+          const vx = nx - center.x, vz = nz - center.z;
+          const dist = Math.hypot(vx, vz);
+          const minDist = Math.min(maxR, parentRadius * 0.5);
+          if (dist > 0 && dist < minDist) {
+            const scale = minDist / dist;
+            nx = center.x + vx * scale;
+            nz = center.z + vz * scale;
+          }
+          placed.push({ x: nx, z: nz, r });
+          done = true;
+        }
+      }
+
+      if (!done) {
+        // Boundary sweep pass with reduced margin
+        const rr = Math.max(1, parentRadius - r - margin);
+        for (let k = 0; k < 360 && !done; k++) {
+          const ang = (k / 360) * Math.PI * 2;
+          const x = center.x + Math.cos(ang) * rr;
+          const z = center.z + Math.sin(ang) * rr;
+          if (!placed.some(p => {
+            const dx = p.x - x; const dz = p.z - z; const need = p.r + r + (margin * 0.6);
+            return dx*dx + dz*dz < need*need;
+          })) {
+            placed.push({ x, z, r });
+            done = true;
+          }
+        }
+      }
+
+      if (!done) {
+        // Final fallback: slight jitter around parent center with minimal margin
+        const ang = idx * golden;
+        const rr = Math.max(parentRadius * innerFrac, Math.min(parentRadius - r - 0.5, r + 1.0));
+        const x = center.x + Math.cos(ang) * rr;
+        const z = center.z + Math.sin(ang) * rr;
+        placed.push({ x, z, r });
+      }
+    }
+
+    return placed.map(p => ({ x: p.x, z: p.z }));
+  }
+
   // Calculate complexity (max depth + children count) of a directory tree
   private calculateDirectoryComplexity(node: FilesystemNode): number {
     if (!node.children || node.children.length === 0) {
@@ -615,10 +757,137 @@ export class FilesystemVisualizer {
     this.towerPositions.set(cyberHome.name, adjustedPos.clone()); // Also store by name
     this.towerHeights.set(cyberHome.path, height);
     this.towerHeights.set(cyberHome.name, height);
-    // Register occupancy
-    this.registerOccupied(adjustedPos);
+    // Register occupancy with a modest radius so homes have clear space
+    this.registerOccupied(adjustedPos, Math.max(8, height * 0.4));
     
     return group;
+  }
+
+  // ----- Highways: glowing rectangles to segment major areas -----
+  private clearHighways(): void {
+    // Remove and dispose all highway meshes/lines
+    this.highwayGroup.children.slice().forEach(child => {
+      this.highwayGroup.remove(child);
+      child.traverse((obj: any) => {
+        if (obj.isMesh || obj.isLine) {
+          obj.geometry?.dispose?.();
+          const m: any = obj.material;
+          if (Array.isArray(m)) m.forEach((mm: any) => mm.dispose?.());
+          else m?.dispose?.();
+        }
+      });
+    });
+  }
+
+  private createHighways(): void {
+    this.clearHighways();
+    // Highway A: a broad boulevard connecting Grid root to the centroid of Cyber homes
+    let trunkStart: THREE.Vector3 | null = null;
+    let trunkEnd: THREE.Vector3 | null = null;
+    if (this.gridRootPosition && this.cyberHomePositions.length > 0) {
+      const centroid = this.computeCentroid(this.cyberHomePositions);
+      trunkStart = this.gridRootPosition.clone();
+      trunkEnd = centroid.clone();
+      this.trunkAngle = Math.atan2(trunkEnd.z - trunkStart.z, trunkEnd.x - trunkStart.x);
+      this.addHighwayStrip(trunkStart, trunkEnd, 14, 0x00aaff);
+    } else {
+      this.trunkAngle = null;
+    }
+
+    // Highway B: a rectangular loop around Grid's primary folders with off-ramps to each
+    if (this.gridPrimaryPositions.length > 0 && this.gridRootPosition) {
+      const center = this.gridRootPosition.clone();
+      // Determine arc radius from primaries
+      const distances = this.gridPrimaryPositions.map(p => p.distanceTo(center));
+      const rArc = Math.max(18, Math.min(...distances) - 6);
+      const meanAway = (this.trunkAngle ?? 0) + Math.PI; // opposite of trunk
+      const start = meanAway - Math.PI / 2;
+      const end = meanAway + Math.PI / 2;
+      const segments = 20;
+      const color = 0x00ffaa;
+      const lane = 8;
+      let prev = new THREE.Vector3(center.x + Math.cos(start) * rArc, 0.03, center.z + Math.sin(start) * rArc);
+      for (let i = 1; i <= segments; i++) {
+        const t = start + (i / segments) * (end - start);
+        const cur = new THREE.Vector3(center.x + Math.cos(t) * rArc, 0.03, center.z + Math.sin(t) * rArc);
+        this.addHighwayStrip(prev.clone(), cur.clone(), lane, color);
+        prev = cur;
+      }
+      // Radial off-ramps from arc to each primary
+      for (const p of this.gridPrimaryPositions) {
+        const ang = Math.atan2(p.z - center.z, p.x - center.x);
+        const clamped = Math.min(end, Math.max(start, ang));
+        const arcPt = new THREE.Vector3(center.x + Math.cos(clamped) * rArc, 0.03, center.z + Math.sin(clamped) * rArc);
+        this.addHighwayStrip(arcPt, new THREE.Vector3(p.x, 0.03, p.z), 5.5, color);
+      }
+    }
+
+    // Off-ramps from trunk to each Cyber home
+    if (trunkStart && trunkEnd && this.cyberHomePositions.length > 0) {
+      for (const h of this.cyberHomePositions) {
+        const proj = this.nearestPointOnSegment(trunkStart, trunkEnd, h);
+        this.addHighwayStrip(proj, new THREE.Vector3(h.x, 0.03, h.z), 4.5, 0x00aaff);
+      }
+    }
+  }
+
+  private computeCentroid(points: THREE.Vector3[]): THREE.Vector3 {
+    const c = new THREE.Vector3();
+    if (points.length === 0) return c;
+    points.forEach(p => c.add(p));
+    c.multiplyScalar(1 / points.length);
+    c.y = 0.03;
+    return c;
+  }
+
+  private addHighwayStrip(start: THREE.Vector3, end: THREE.Vector3, width: number, color: number) {
+    // Wide glowing strip with edge lines, all coplanar with ground
+    const dir = new THREE.Vector3().subVectors(end, start);
+    const len = dir.length();
+    if (len < 0.001) return;
+
+    const center = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+    const y = 0.03;
+    center.y = y; start.y = y; end.y = y;
+    const angle = Math.atan2(end.z - start.z, end.x - start.x);
+
+    const group = new THREE.Group();
+    group.position.copy(center);
+    group.rotation.x = -Math.PI / 2; // lay local XY onto ground XZ
+    // Rotate around local Z after laying flat so the strip stays coplanar with ground
+    group.rotation.z = angle;
+
+    const planeGeom = new THREE.PlaneGeometry(len, width, 1, 1);
+    // Solid highway surface for stronger visual separation
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: false, opacity: 1.0, blending: THREE.NormalBlending, depthWrite: true, side: THREE.DoubleSide });
+    const plane = new THREE.Mesh(planeGeom, mat);
+    group.add(plane);
+
+    // Edge lines along local X at +/- half width (local Y is width axis before rotation)
+    const half = width / 2;
+    const positions = new Float32Array([
+      -len/2, -half, 0,   len/2, -half, 0,
+      -len/2,  half, 0,   len/2,  half, 0,
+    ]);
+    const edgeGeom = new THREE.BufferGeometry();
+    edgeGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const edgeMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending });
+    const edges = new THREE.LineSegments(edgeGeom, edgeMat);
+    group.add(edges);
+
+    // Lift the group slightly above ground and add to highways
+    group.position.y = y;
+    this.highwayGroup.add(group);
+  }
+
+  // Removed rectangular helper (now using semicircle for grid)
+
+  private nearestPointOnSegment(a: THREE.Vector3, b: THREE.Vector3, p: THREE.Vector3): THREE.Vector3 {
+    const ap = new THREE.Vector3().subVectors(p, a);
+    const ab = new THREE.Vector3().subVectors(b, a);
+    const ab2 = ab.lengthSq();
+    const t = ab2 > 0 ? Math.max(0, Math.min(1, ap.dot(ab) / ab2)) : 0;
+    return new THREE.Vector3().copy(a).add(ab.multiplyScalar(t)).setY(0.03);
   }
   
   // Create connection lines between parent and child directories
