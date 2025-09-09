@@ -44,7 +44,6 @@ export class CyberInfoWindow {
   private isFollowing = false;
   // TTS state
   private isSpeaking = false;
-  private ttsUtterance: SpeechSynthesisUtterance | null = null;
   private isAutoSpeak: boolean = true;
   private lastSpokenText: string | null = null;
   private userGestureEnabled: boolean = false;
@@ -1312,23 +1311,19 @@ export class CyberInfoWindow {
       };
       utter.onend = () => {
         this.isSpeaking = false;
-        this.ttsUtterance = null;
         this.updateTTSButton();
         this.updateStatus('Finished reading reflection');
         this.processNextSpeak();
       };
       utter.onerror = () => {
         this.isSpeaking = false;
-        this.ttsUtterance = null;
         this.updateTTSButton();
         this.updateStatus('TTS error');
         this.processNextSpeak();
       };
-      this.ttsUtterance = utter;
       window.speechSynthesis.speak(utter);
     } catch (e) {
       this.isSpeaking = false;
-      this.ttsUtterance = null;
       this.updateTTSButton();
       this.updateStatus('Failed to start TTS');
     }
@@ -1482,7 +1477,6 @@ export class CyberInfoWindow {
     try { window.speechSynthesis.cancel(); } catch {}
     try { this.ttsAudio?.pause(); } catch {}
     this.isSpeaking = false;
-    this.ttsUtterance = null;
     this.updateTTSButton();
     this.updateStatus('Stopped reading');
   }

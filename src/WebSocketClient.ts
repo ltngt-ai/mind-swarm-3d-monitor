@@ -5,7 +5,6 @@ type EventHandler = (data: any) => void;
 export class WebSocketClient {
   private ws: WebSocket | null = null;
   private url: string;
-  private reconnectInterval: number = 5000; // legacy default (unused after backoff)
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private eventHandlers: Map<string, EventHandler[]> = new Map();
   // Backoff + heartbeat

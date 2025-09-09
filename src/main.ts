@@ -53,6 +53,8 @@ const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
+// Ensure shader compile errors surface clearly
+renderer.debug.checkShaderErrors = true;
 
 // Post-processing for glow effects (allow low-perf fallback for OBS/embedded)
 const urlParams = new URLSearchParams(window.location.search);
@@ -81,8 +83,17 @@ const gui = new GUI();
 (gui as any).domElement && ((gui as any).domElement.style.display = 'none');
 
 // Lighting
-const ambientLight = new THREE.AmbientLight(0x0080ff, 0.1);
+const ambientLight = new THREE.AmbientLight(0x0080ff, 0.22);
 scene.add(ambientLight);
+
+// Directional light for solid flat shading on towers
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+dirLight.position.set(40, 120, 10);
+scene.add(dirLight);
+
+// Low-intensity hemisphere fill to ensure lit faces at glancing angles
+const hemi = new THREE.HemisphereLight(0x66ccff, 0x001122, 0.18);
+scene.add(hemi);
 
 // Grid system (the Tron floor) - infinite LOD grid
 const gridSystem = new GridSystem();
@@ -405,6 +416,19 @@ window.addEventListener('resize', onWindowResize);
 // Clock for delta time
 const clock = new THREE.Clock();
 let lastRafAt = performance.now();
+let lastGlErrorCheck = 0;
+
+function glErrorToString(gl: WebGLRenderingContext, code: number): string {
+  switch (code) {
+    case gl.NO_ERROR: return 'NO_ERROR';
+    case gl.INVALID_ENUM: return 'INVALID_ENUM';
+    case gl.INVALID_VALUE: return 'INVALID_VALUE';
+    case gl.INVALID_OPERATION: return 'INVALID_OPERATION';
+    case gl.OUT_OF_MEMORY: return 'OUT_OF_MEMORY';
+    case (gl as any).CONTEXT_LOST_WEBGL: return 'CONTEXT_LOST_WEBGL';
+    default: return `0x${code.toString(16)}`;
+  }
+}
 
 function renderFrame() {
   const deltaTime = clock.getDelta();
@@ -422,6 +446,25 @@ function renderFrame() {
 
   // Render with post-processing
   composer.render();
+
+  // Sample WebGL error state at most once per second
+  if (performance.now() - lastGlErrorCheck > 1000) {
+    const gl = renderer.getContext();
+    // Drain all pending errors
+    let err = gl.getError();
+    let logged = false;
+    let guard = 0;
+    while (err !== gl.NO_ERROR && guard++ < 8) {
+      console.warn('WebGL error:', glErrorToString(gl, err));
+      logged = true;
+      err = gl.getError();
+    }
+    if (logged) {
+      // Also log renderer stats to correlate
+      console.info('Renderer info:', renderer.info);
+    }
+    lastGlErrorCheck = performance.now();
+  }
 }
 
 // Animation loop

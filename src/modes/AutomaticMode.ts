@@ -4,7 +4,7 @@ import { CameraMode } from '../camera/CameraController';
 import { eventBus, Events } from '../utils/EventBus';
 
 interface CameraShot {
-  type: 'cyber-focus';
+  type: 'cyber-focus' | 'overview';
   duration: number;
   target?: string; // Cyber name
   position?: THREE.Vector3;
@@ -20,8 +20,7 @@ export class AutomaticMode extends Mode {
   // Round-robin index for simple cycling between cybers
   private roundRobinIndex: number = -1;
   
-  // Activity tracking
-  private cyberActivity: Map<string, number> = new Map();
+  // Activity tracking (recent events only; no per-cyber counters)
   private recentEvents: Array<{ type: string; cyber?: string; timestamp: number }> = [];
   private lastActivityCheck: number = Date.now();
   
@@ -43,6 +42,8 @@ export class AutomaticMode extends Mode {
   protected setupUI(): void {
     // Create streaming overlay
     this.createStreamOverlay();
+    // Create activity feed panel (used by addActivityEvent)
+    this.createActivityFeed();
     // Stats panel disabled for a cleaner view
     
     // Add GUI controls
@@ -294,6 +295,13 @@ export class AutomaticMode extends Mode {
         }
         this.executeCyberFocusShot(target);
       }
+    } else if (shot.type === 'overview') {
+      // Switch to an overview shot
+      if (this.context.cyberInfoWindow) {
+        // Keep overlay docked; no specific cyber selected
+        this.context.cyberInfoWindow.setDock('bottom-left');
+      }
+      this.executeOverviewShot();
     }
   }
 
@@ -347,40 +355,7 @@ export class AutomaticMode extends Mode {
     this.context.cameraController.setTarget(agent.mesh);
   }
 
-  private executeFilesystemShot(): void {
-    // Focus on filesystem visualization
-    const position = new THREE.Vector3(0, 60, -30);
-    const lookAt = new THREE.Vector3(0, 0, -50);
-    
-    // Animate camera to filesystem view
-    this.context.cameraController.animateTo({
-      position,
-      lookAt,
-      duration: 2000
-    });
-    
-    // Disable auto-rotate for filesystem view
-    this.context.cameraController.setAutoRotate(false);
-    this.context.cameraController.setMode(CameraMode.ORBIT);
-  }
-
-  private executeActivityZoneShot(): void {
-    // Find zone with most activity - for now, do a dramatic sweep
-    const position = new THREE.Vector3(
-      Math.random() * 100 - 50,
-      30 + Math.random() * 30,
-      Math.random() * 100 - 50
-    );
-    
-    this.context.cameraController.animateTo({
-      position,
-      lookAt: new THREE.Vector3(0, 0, 0),
-      duration: 2500
-    });
-    
-    // Gentle auto-rotate
-    this.context.cameraController.setAutoRotate(true, 0.2);
-  }
+  // Removed unused shots: filesystem view and activity zone
 
   private startCinematicSequence(): void {
     // Start a cinematic camera path
@@ -560,7 +535,11 @@ export class AutomaticMode extends Mode {
     const bf = name ? this.context.agentManager.getAgentBio(name) : null;
     const clamp = (n?: number) => (typeof n === 'number' ? Math.max(0, Math.min(100, Math.round(n))) : 0);
     const hueToColor = (h:number,s=100,l=50)=>`hsl(${h}, ${s}%, ${l}%)`;
-    const blend = (c1:string,c2:string,t:number)=>`linear-gradient(90deg, ${c1}, ${c2})`;
+    const blend = (c1:string,c2:string,t:number)=>{
+      const a = Math.max(0, Math.min(100, Math.round((1 - t) * 100)));
+      const b = Math.max(0, Math.min(100, Math.round(t * 100)));
+      return `linear-gradient(90deg, ${c1} ${a}%, ${c2} ${b}%)`;
+    };
     const colorFor = (metric: string, v?: number) => {
       const val = clamp(v);
       switch (metric) {
@@ -608,9 +587,7 @@ export class AutomaticMode extends Mode {
     }
   }
   
-  private getShotDisplayName(shot: CameraShot): string {
-    return `👁️ ${shot.target || 'Cyber'}`;
-  }
+  // Removed unused helper (getShotDisplayName)
 
   private updateActivityFeed(): void {
     if (!this.activityFeed) return;
@@ -636,11 +613,4 @@ export class AutomaticMode extends Mode {
     this.roundRobinIndex = (this.roundRobinIndex + 1) % names.length;
     return names[this.roundRobinIndex];
   }
-}
-
-// Helper to clamp potential undefined/NaN to 0-100
-function clamp0to100(v: any): number {
-  const n = typeof v === 'number' ? v : 0;
-  if (!isFinite(n)) return 0;
-  return Math.max(0, Math.min(100, n));
 }

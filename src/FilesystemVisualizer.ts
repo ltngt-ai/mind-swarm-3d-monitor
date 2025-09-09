@@ -225,7 +225,16 @@ export class FilesystemVisualizer {
         // Meshes (boxes, wires, etc.)
         if ((child as any).isMesh) {
           const mesh = child as THREE.Mesh;
-          (mesh.geometry as any)?.dispose?.();
+          // Avoid disposing shared base geometries reused across towers
+          const geom = mesh.geometry as any;
+          if (
+            geom &&
+            geom !== this.towerGeometry &&
+            geom !== this.subTowerGeometry &&
+            geom !== this.fileGeometry
+          ) {
+            geom.dispose?.();
+          }
           const mat = mesh.material as any;
           if (Array.isArray(mat)) mat.forEach((m: any) => { m.map?.dispose?.(); m.dispose?.(); });
           else { mat?.map?.dispose?.(); mat?.dispose?.(); }
@@ -602,13 +611,12 @@ export class FilesystemVisualizer {
     
     const group = new THREE.Group();
     
-    // Small tower structure
+    // Small tower structure (solid with flat shading)
     const towerMaterial = new THREE.MeshPhongMaterial({
       color: colors.primary,
-      emissive: colors.emissive,
-      emissiveIntensity: 0.15,
-      transparent: true,
-      opacity: 0.7
+      emissive: 0x000000,
+      emissiveIntensity: 0.0,
+      flatShading: true
     });
     
     const tower = new THREE.Mesh(this.subTowerGeometry, towerMaterial);
@@ -616,19 +624,7 @@ export class FilesystemVisualizer {
     tower.position.y = height / 2;
     group.add(tower);
     
-    // Wireframe overlay
-    const wireframeMaterial = new THREE.MeshBasicMaterial({
-      color: colors.primary,
-      wireframe: true,
-      transparent: true,
-      opacity: 0.4
-    });
-    const wireframe = new THREE.Mesh(this.subTowerGeometry, wireframeMaterial);
-    wireframe.scale.y = height;
-    wireframe.scale.x = 1.02;
-    wireframe.scale.z = 1.02;
-    wireframe.position.y = height / 2;
-    group.add(wireframe);
+    // Removed wireframe overlay for solid look
     
     // Glowing top
     const topGeometry = new THREE.BoxGeometry(2.2, 0.3, 2.2);
@@ -638,13 +634,9 @@ export class FilesystemVisualizer {
       opacity: 0.8
     });
     const top = new THREE.Mesh(topGeometry, topMaterial);
+    top.name = 'top-glow';
     top.position.y = height;
     group.add(top);
-    
-    // Point light
-    const light = new THREE.PointLight(colors.primary, 0.3, height * 1.5);
-    light.position.y = height + 1;
-    group.add(light);
     
     // Label with cleaned name
     const canvas = document.createElement('canvas');
@@ -737,53 +729,57 @@ export class FilesystemVisualizer {
     position: THREE.Vector3,
     height: number,
     color: number,
-    emissiveColor?: number
+    _emissiveColor?: number
   ): THREE.Group {
     const group = new THREE.Group();
     
-    // Main tower structure
-    const towerMaterial = new THREE.MeshPhongMaterial({
+    // Main tower structure with robust diffuse lighting (Lambert) and fog disabled
+    const towerMaterial = new THREE.MeshLambertMaterial({
       color: color,
-      emissive: emissiveColor || color,
-      emissiveIntensity: 0.2,
-      transparent: true,
-      opacity: 0.8
+      emissive: new THREE.Color(color),
+      emissiveIntensity: 0.08,
+      side: THREE.DoubleSide
     });
+    towerMaterial.fog = false;
+    towerMaterial.transparent = false;
+    towerMaterial.depthWrite = true;
+    towerMaterial.depthTest = true;
+    towerMaterial.alphaTest = 0.0;
+    (towerMaterial as any).colorWrite = true;
+    towerMaterial.blending = THREE.NormalBlending;
     
-    const tower = new THREE.Mesh(this.towerGeometry, towerMaterial);
-    tower.scale.y = height;
+    // Use per-instance geometry sized to final height to avoid any shared-geometry disposal issues
+    const towerGeom = new THREE.BoxGeometry(4, height, 4);
+    const tower = new THREE.Mesh(towerGeom, towerMaterial);
     tower.position.y = height / 2;
     group.add(tower);
+
+    // Subtle outline to ensure visibility in all lighting/fog angles
+    const edgeGeom = new THREE.EdgesGeometry(towerGeom);
+    const edgeMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.35 });
+    // Occlude edges behind faces; avoid z-fighting via slight scale and render ordering
+    edgeMat.depthTest = true;
+    edgeMat.depthWrite = false;
+    const edgeLines = new THREE.LineSegments(edgeGeom, edgeMat);
+    edgeLines.position.y = height / 2;
+    edgeLines.renderOrder = (tower.renderOrder || 0) + 1;
+    edgeLines.scale.set(1.002, 1.002, 1.002);
+    group.add(edgeLines);
     
-    // Wireframe overlay
-    const wireframeMaterial = new THREE.MeshBasicMaterial({
-      color: color,
-      wireframe: true,
-      transparent: true,
-      opacity: 0.5
-    });
-    const wireframe = new THREE.Mesh(this.towerGeometry, wireframeMaterial);
-    wireframe.scale.y = height;
-    wireframe.scale.x = 1.02;
-    wireframe.scale.z = 1.02;
-    wireframe.position.y = height / 2;
-    group.add(wireframe);
+    // Removed wireframe overlay for solid look
     
     // Glowing top
     const topGeometry = new THREE.BoxGeometry(4.5, 0.5, 4.5);
     const topMaterial = new THREE.MeshBasicMaterial({
       color: color,
       transparent: true,
-      opacity: 0.9
+      opacity: 0.9,
+      depthWrite: false
     });
     const top = new THREE.Mesh(topGeometry, topMaterial);
+    top.name = 'top-glow';
     top.position.y = height;
     group.add(top);
-    
-    // Point light at the top
-    const light = new THREE.PointLight(color, 0.5, height * 2);
-    light.position.y = height + 2;
-    group.add(light);
     
     // Label
     const canvas = document.createElement('canvas');
@@ -823,53 +819,56 @@ export class FilesystemVisualizer {
     position: THREE.Vector3,
     height: number,
     color: number,
-    emissiveColor?: number
+    _emissiveColor?: number
   ): THREE.Group {
     const group = new THREE.Group();
     
-    // Sub-tower structure (smaller)
-    const towerMaterial = new THREE.MeshPhongMaterial({
+    // Sub-tower structure with robust diffuse lighting (Lambert) and fog disabled
+    const towerMaterial = new THREE.MeshLambertMaterial({
       color: color,
-      emissive: emissiveColor || color,
-      emissiveIntensity: 0.15,
-      transparent: true,
-      opacity: 0.7
+      emissive: new THREE.Color(color),
+      emissiveIntensity: 0.07,
+      side: THREE.DoubleSide
     });
+    towerMaterial.fog = false;
+    towerMaterial.transparent = false;
+    towerMaterial.depthWrite = true;
+    towerMaterial.depthTest = true;
+    towerMaterial.alphaTest = 0.0;
+    (towerMaterial as any).colorWrite = true;
+    towerMaterial.blending = THREE.NormalBlending;
     
-    const tower = new THREE.Mesh(this.subTowerGeometry, towerMaterial);
-    tower.scale.y = height;
+    // Use per-instance geometry sized to final height to avoid any shared-geometry disposal issues
+    const towerGeom = new THREE.BoxGeometry(2, height, 2);
+    const tower = new THREE.Mesh(towerGeom, towerMaterial);
     tower.position.y = height / 2;
     group.add(tower);
+
+    // Subtle outline to ensure visibility in all lighting/fog angles
+    const edgeGeom = new THREE.EdgesGeometry(towerGeom);
+    const edgeMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.3 });
+    edgeMat.depthTest = true;
+    edgeMat.depthWrite = false;
+    const edgeLines = new THREE.LineSegments(edgeGeom, edgeMat);
+    edgeLines.position.y = height / 2;
+    edgeLines.renderOrder = (tower.renderOrder || 0) + 1;
+    edgeLines.scale.set(1.002, 1.002, 1.002);
+    group.add(edgeLines);
     
-    // Wireframe overlay (smaller)
-    const wireframeMaterial = new THREE.MeshBasicMaterial({
-      color: color,
-      wireframe: true,
-      transparent: true,
-      opacity: 0.4
-    });
-    const wireframe = new THREE.Mesh(this.subTowerGeometry, wireframeMaterial);
-    wireframe.scale.y = height;
-    wireframe.scale.x = 1.02;
-    wireframe.scale.z = 1.02;
-    wireframe.position.y = height / 2;
-    group.add(wireframe);
+    // Removed wireframe overlay for solid look
     
     // Smaller glowing top
     const topGeometry = new THREE.BoxGeometry(2.2, 0.3, 2.2);
     const topMaterial = new THREE.MeshBasicMaterial({
       color: color,
       transparent: true,
-      opacity: 0.8
+      opacity: 0.8,
+      depthWrite: false
     });
     const top = new THREE.Mesh(topGeometry, topMaterial);
+    top.name = 'top-glow';
     top.position.y = height;
     group.add(top);
-    
-    // Smaller point light
-    const light = new THREE.PointLight(color, 0.3, height * 1.5);
-    light.position.y = height + 1;
-    group.add(light);
     
     // Smaller label
     const canvas = document.createElement('canvas');
@@ -974,32 +973,22 @@ export class FilesystemVisualizer {
     
     if (tower) {
       console.log(`Pulsing tower: ${foundName} for path: ${path}`);
-      const light = tower.children.find(child => child instanceof THREE.PointLight) as THREE.PointLight;
-      if (light) {
-        // Animate light intensity
-        const startIntensity = light.intensity || 0.5;
-        const targetIntensity = Math.max(startIntensity * 4, 2);
+      const top = tower.children.find((child: any) => child.isMesh && child.name === 'top-glow') as THREE.Mesh | undefined;
+      if (top) {
+        const mat = top.material as THREE.MeshBasicMaterial;
+        const startOpacity = mat.opacity;
+        const targetOpacity = Math.max(0.8, Math.min(1.0, startOpacity + 0.6));
         const duration = 800;
         const startTime = Date.now();
-        
         const animate = () => {
           const elapsed = Date.now() - startTime;
           const progress = Math.min(elapsed / duration, 1);
-          
-          if (progress < 0.5) {
-            light.intensity = startIntensity + (targetIntensity - startIntensity) * (progress * 2);
-          } else {
-            light.intensity = targetIntensity - (targetIntensity - startIntensity) * ((progress - 0.5) * 2);
-          }
-          
-          if (progress < 1) {
-            requestAnimationFrame(animate);
-          } else {
-            // Reset to original intensity
-            light.intensity = startIntensity;
-          }
+          if (progress < 0.5) mat.opacity = startOpacity + (targetOpacity - startOpacity) * (progress * 2);
+          else mat.opacity = targetOpacity - (targetOpacity - startOpacity) * ((progress - 0.5) * 2);
+          mat.needsUpdate = true;
+          if (progress < 1) requestAnimationFrame(animate);
+          else mat.opacity = startOpacity;
         };
-        
         animate();
       }
     } else {
@@ -1085,17 +1074,14 @@ export class FilesystemVisualizer {
           wireframe.rotation.y += 0.005;
         }
       } else {
-        // Normal tower animations
-        // Rotate wireframes slowly (only if a mesh)
-        const wf = tower.children[1];
-        if (wf && (wf as any).isMesh) {
-          (wf as THREE.Mesh).rotation.y += 0.001;
-        }
-        
-        // Subtle glow pulse on the top light
-        const light = tower.children.find(child => child instanceof THREE.PointLight) as THREE.PointLight;
-        if (light) {
-          light.intensity = 0.5 + Math.sin(this.time * 0.5 + tower.position.x * 0.1) * 0.1;
+        // Normal tower animations: pulse the top glow opacity
+        const top = tower.children.find((child: any) => child.isMesh && child.name === 'top-glow') as THREE.Mesh | undefined;
+        if (top && (top.material as any)) {
+          const mat = top.material as THREE.MeshBasicMaterial;
+          const base = 0.55;
+          const amp = 0.25;
+          mat.opacity = Math.max(0.2, Math.min(1.0, base + Math.sin(this.time * 0.6 + tower.position.x * 0.07) * amp));
+          mat.needsUpdate = true;
         }
       }
     });
@@ -1219,30 +1205,22 @@ export class FilesystemVisualizer {
     
     if (tower) {
       // Pulse the light to show highlighting
-      const light = tower.children.find(child => child instanceof THREE.PointLight) as THREE.PointLight;
-      if (light) {
-        const originalIntensity = light.intensity || 0.5;
-        const targetIntensity = originalIntensity * 3;
+      const top = tower.children.find((child: any) => child.isMesh && child.name === 'top-glow') as THREE.Mesh | undefined;
+      if (top) {
+        const mat = top.material as THREE.MeshBasicMaterial;
+        const originalOpacity = mat.opacity;
+        const targetOpacity = Math.min(1.0, originalOpacity + 0.5);
         const duration = 1000;
         const startTime = Date.now();
-        
         const animate = () => {
           const elapsed = Date.now() - startTime;
           const progress = Math.min(elapsed / duration, 1);
-          
-          if (progress < 0.5) {
-            light.intensity = originalIntensity + (targetIntensity - originalIntensity) * (progress * 2);
-          } else {
-            light.intensity = targetIntensity - (targetIntensity - originalIntensity) * ((progress - 0.5) * 2);
-          }
-          
-          if (progress < 1) {
-            requestAnimationFrame(animate);
-          } else {
-            light.intensity = originalIntensity;
-          }
+          if (progress < 0.5) mat.opacity = originalOpacity + (targetOpacity - originalOpacity) * (progress * 2);
+          else mat.opacity = targetOpacity - (targetOpacity - originalOpacity) * ((progress - 0.5) * 2);
+          mat.needsUpdate = true;
+          if (progress < 1) requestAnimationFrame(animate);
+          else mat.opacity = originalOpacity;
         };
-        
         animate();
       }
     } else {
@@ -1296,9 +1274,7 @@ export class FilesystemVisualizer {
     group.add(fileMesh);
     
     // Small light
-    const light = new THREE.PointLight(color, 0.1, 5);
-    light.position.y = 1;
-    group.add(light);
+    // Removed point light to keep scene light count low and shaders valid on WebGL1/embedded renderers
     
     // Position the file marker
     group.position.copy(position);
