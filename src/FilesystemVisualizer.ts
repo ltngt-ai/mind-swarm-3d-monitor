@@ -42,6 +42,8 @@ export class FilesystemVisualizer {
   private gridPrimaryPositions: THREE.Vector3[] = [];
   private gridRootPosition: THREE.Vector3 | null = null;
   private trunkAngle: number | null = null; // direction from grid root to homes centroid
+  // Smooth transitions
+  private prevPositions: Map<string, THREE.Vector3> = new Map();
   // City grid parameters removed (using circle packing)
   
   // Color scheme for different directory types
@@ -169,6 +171,11 @@ export class FilesystemVisualizer {
   // Update the 3D visualization based on current filesystem structure
   private updateVisualization(): void {
     if (!this.filesystemStructure) return;
+    // Snapshot current positions for smooth transitions
+    this.prevPositions = new Map();
+    this.towers.forEach((grp, key) => {
+      this.prevPositions.set(key, grp.position.clone());
+    });
     
     // Clear existing towers
     this.clearTowers();
@@ -389,7 +396,7 @@ export class FilesystemVisualizer {
     const minClear = isTop ? 14 : Math.max(8, 8 - Math.min(depth, 6) + height * 0.04);
     // Adjust desired position to avoid overlaps
     const adjustedPos = this.findNonOverlappingPosition(position, minClear);
-    // Create main tower at the adjusted position
+    // Create main tower at the adjusted position (start at previous pos if known)
     const mainTower = depth === 0 
       ? this.createTower(directory.name, adjustedPos, height, colors.primary, colors.emissive)
       : this.createSubTower(directory.name, adjustedPos, height, colors.primary, colors.emissive);
@@ -399,6 +406,15 @@ export class FilesystemVisualizer {
     const pathKey = directory.path || directory.name;
     this.towers.set(pathKey, mainTower);
     this.towerPositions.set(pathKey, adjustedPos.clone());
+    // Smooth transition from previous position if available
+    const prev = this.prevPositions.get(pathKey);
+    if (prev) {
+      mainTower.position.copy(prev);
+      (mainTower.userData as any).targetPos = adjustedPos.clone();
+    } else {
+      mainTower.position.copy(adjustedPos);
+      (mainTower.userData as any).targetPos = adjustedPos.clone();
+    }
     this.towerHeights.set(pathKey, height);
 
     // Compute and store subtree radius for circle packing and global occupancy
@@ -858,8 +874,8 @@ export class FilesystemVisualizer {
     group.rotation.z = angle;
 
     const planeGeom = new THREE.PlaneGeometry(len, width, 1, 1);
-    // Solid highway surface for stronger visual separation
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: false, opacity: 1.0, blending: THREE.NormalBlending, depthWrite: true, side: THREE.DoubleSide });
+    // Solid-looking highway that doesn't occlude towers: keep depthWrite off
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, blending: THREE.NormalBlending, depthWrite: false, side: THREE.DoubleSide });
     const plane = new THREE.Mesh(planeGeom, mat);
     group.add(plane);
 
@@ -871,12 +887,12 @@ export class FilesystemVisualizer {
     ]);
     const edgeGeom = new THREE.BufferGeometry();
     edgeGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const edgeMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending });
+    const edgeMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
     const edges = new THREE.LineSegments(edgeGeom, edgeMat);
     group.add(edges);
 
     // Lift the group slightly above ground and add to highways
-    group.position.y = y;
+    group.position.y = y + 0.001; // lift slightly to avoid z-fighting without occluding
     this.highwayGroup.add(group);
   }
 
@@ -906,12 +922,12 @@ export class FilesystemVisualizer {
   }
 
   // Fallback: create a single glowy tube (core + halo) between two points
-  private createConnectionTube(start: THREE.Vector3, end: THREE.Vector3, color: number): void {
+  private createConnectionTube(start: THREE.Vector3, end: THREE.Vector3, color: number, scale: number = 1.0, container?: THREE.Group): void {
     const dir = new THREE.Vector3().subVectors(end, start);
     const length = dir.length();
     if (length < 0.0001) return;
     const group = new THREE.Group();
-    const coreRadius = 0.24;
+    const coreRadius = 0.24 * Math.max(0.05, scale);
     const coreGeom = new THREE.CylinderGeometry(coreRadius, coreRadius, 1, 4, 1, true);
     const coreMat = new THREE.MeshBasicMaterial({
       color,
@@ -931,7 +947,11 @@ export class FilesystemVisualizer {
     const yAxis = new THREE.Vector3(0, 1, 0);
     group.quaternion.setFromUnitVectors(yAxis, dir.clone().normalize());
     group.scale.set(1, length, 1);
-    this.linkGroup.add(group);
+    if (container) {
+      container.add(group);
+    } else {
+      this.linkGroup.add(group);
+    }
   }
 
   // Create a main directory tower
@@ -1270,6 +1290,18 @@ export class FilesystemVisualizer {
     
     // Animate towers
     this.towers.forEach((tower, name) => {
+      // Smoothly move toward target positions if present
+      const target: THREE.Vector3 | undefined = (tower.userData as any)?.targetPos;
+      if (target) {
+        const pos = tower.position;
+        const distSq = pos.distanceToSquared(target);
+        if (distSq > 0.0001) {
+          pos.lerp(target, 0.15); // easing factor
+        } else {
+          pos.copy(target);
+          delete (tower.userData as any).targetPos;
+        }
+      }
       // Special animation for NOT CONNECTED indicator
       if (name === 'not-connected') {
         // Pulse the opacity and scale
@@ -1446,39 +1478,41 @@ export class FilesystemVisualizer {
     const files = directory.children.filter(child => child.type === 'file');
     if (files.length === 0) return;
     
-    // Position files in a small circle around the directory tower
-    const radius = 3;
+    // Arrange files in expanding rings around the tower so busy folders read clearly
+    const perRing = 12; // files per ring before expanding outward
+    const ringSpacing = 2.2; // distance between rings
+    const baseRadius = 3.5; // first ring radius
     files.forEach((file, index) => {
-      const angle = (index / files.length) * Math.PI * 2;
+      const ring = Math.floor(index / perRing);
+      const idxInRing = index % perRing;
+      const inThisRing = Math.min(perRing, files.length - ring * perRing);
+      const angle = (idxInRing / inThisRing) * Math.PI * 2;
+      const radius = baseRadius + ring * ringSpacing;
       const filePosition = new THREE.Vector3(
         basePosition.x + Math.cos(angle) * radius,
         basePosition.y + 2,
         basePosition.z + Math.sin(angle) * radius
       );
-      
-      this.createFileMarker(file, filePosition);
+      this.createFileMarker(file, filePosition, basePosition);
     });
   }
   
   // Create a small marker for a file
-  private createFileMarker(file: FilesystemNode, position: THREE.Vector3) {
+  private createFileMarker(file: FilesystemNode, position: THREE.Vector3, hubPosition?: THREE.Vector3) {
     const group = new THREE.Group();
     
     // File colors based on extension or type
-    let color = 0x888888; // Default gray
-    if (file.name.endsWith('.json')) color = 0xffaa00;
-    else if (file.name.endsWith('.py')) color = 0x3776ab;
-    else if (file.name.endsWith('.js') || file.name.endsWith('.ts')) color = 0xf7df1e;
-    else if (file.name.endsWith('.md')) color = 0x4285f4;
-    else if (file.name.endsWith('.txt')) color = 0xcccccc;
+    const visual = this.getFileVisual(file.name);
+    const color = visual.color;
     
     // Small sphere for the file
     const fileMaterial = new THREE.MeshPhongMaterial({
-      color: color,
+      color,
       transparent: true,
-      opacity: 0.7,
+      opacity: 0.9,
       emissive: color,
-      emissiveIntensity: 0.1
+      emissiveIntensity: 0.6,
+      shininess: 40
     });
     
     const fileMesh = new THREE.Mesh(this.fileGeometry, fileMaterial);
@@ -1487,15 +1521,86 @@ export class FilesystemVisualizer {
     // Small light
     // Removed point light to keep scene light count low and shaders valid on WebGL1/embedded renderers
     
-    // Position the file marker
-    group.position.copy(position);
-    
-    // Add to scene
+    // We'll determine the final target position then place smoothly from any previous position
+    let targetPos = position.clone();
+    // Hub-and-spoke: thinner glowy tube from hub to sphere center
+    if (hubPosition) {
+      const start = new THREE.Vector3(hubPosition.x, Math.max(0.6, hubPosition.y + 0.6), hubPosition.z);
+      // sphere will sit centered on the spoke; compute midpoint height
+      const midY = (start.y + position.y) * 0.5;
+      targetPos = new THREE.Vector3(position.x, midY, position.z);
+      // Temporarily set group at target to compute local geometry; we'll move it after
+      group.position.copy(targetPos);
+      // Create the spoke inside this file group using local coordinates
+      const localStart = start.clone().sub(group.position);
+      const localEnd = new THREE.Vector3(0, 0, 0); // sphere center
+      this.createConnectionTube(localStart, localEnd, color, 0.5, group); // half-radius spoke
+    }
+
+    // Add to scene and register
     this.rootGroup.add(group);
-    
-    // Store reference
     this.towers.set(file.path, group);
-    this.towerPositions.set(file.path, position);
+    this.towerPositions.set(file.path, targetPos.clone());
+    // Smooth placement from previous spot if available
+    const prev = this.prevPositions.get(file.path || file.name || '');
+    if (prev) {
+      group.position.copy(prev);
+    } else {
+      group.position.copy(targetPos);
+    }
+    (group.userData as any).targetPos = targetPos.clone();
+
+    // Label + icon sprite (compact)
+    const label = this.createFileLabelSprite(file.name, visual.icon, color);
+    // Place label just above the sphere (relative to the file group)
+    label.position.set(0, 1.2, 0);
+    label.scale.set(3.2, 1.2, 1);
+    group.add(label);
+  }
+
+  // Stronger color coding and a simple icon per file type
+  private getFileVisual(name: string): { color: number; icon: string } {
+    const lower = name.toLowerCase();
+    const pick = (c: number, i: string) => ({ color: c, icon: i });
+    if (/(\.py|\.ipynb)$/.test(lower)) return pick(0x3776ab, '🐍');
+    if (/(\.js|\.ts|\.tsx|\.jsx)$/.test(lower)) return pick(0xf7df1e, '🧩');
+    if (/(\.json|\.yaml|\.yml|\.toml)$/.test(lower)) return pick(0xffa000, '🗂️');
+    if (/(\.md|\.rst)$/.test(lower)) return pick(0x4285f4, '📘');
+    if (/(\.txt|\.log)$/.test(lower)) return pick(0xcccccc, '📄');
+    if (/(\.png|\.jpg|\.jpeg|\.gif|\.svg)$/.test(lower)) return pick(0xff66aa, '🖼️');
+    if (/(\.sh|\.bash)$/.test(lower)) return pick(0x00cc88, '🛠️');
+    return pick(0x88aaff, '📦');
+  }
+
+  private createFileLabelSprite(name: string, icon: string, colorHex: number): THREE.Sprite {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512; canvas.height = 180;
+    const ctx = canvas.getContext('2d')!;
+    // Background with slight alpha
+    ctx.fillStyle = 'rgba(0,20,40,0.85)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Accent bar
+    const r = (colorHex >> 16) & 255, g = (colorHex >> 8) & 255, b = colorHex & 255;
+    ctx.fillStyle = `rgba(${r},${g},${b},0.85)`;
+    ctx.fillRect(0, 0, 14, canvas.height);
+    // Icon
+    ctx.font = 'bold 90px Courier New';
+    ctx.fillStyle = `rgba(${r},${g},${b},0.95)`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(icon, 26, canvas.height / 2);
+    // Name text (trim if long)
+    ctx.font = 'bold 40px Courier New';
+    ctx.fillStyle = '#cfffff';
+    const maxLen = 26;
+    const short = name.length > maxLen ? name.slice(0, maxLen - 1) + '…' : name;
+    ctx.fillText(short, 120, canvas.height / 2);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+    // Prevent label sprites from occluding towers or roads
+    (mat as any).depthWrite = false;
+    return new THREE.Sprite(mat);
   }
 
   // Case-insensitive map lookup helper
