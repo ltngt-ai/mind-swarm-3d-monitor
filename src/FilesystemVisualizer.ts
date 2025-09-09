@@ -36,18 +36,19 @@ export class FilesystemVisualizer {
   private linkDummy: THREE.Object3D = new THREE.Object3D();
   // Group to contain all link-related objects (instanced or fallback tubes)
   private linkGroup: THREE.Group = new THREE.Group();
-  // Highways: glowing rectangles to segment major areas
-  private highwayGroup: THREE.Group = new THREE.Group();
-  private cyberHomePositions: THREE.Vector3[] = [];
-  private gridPrimaryPositions: THREE.Vector3[] = [];
-  private trunkAngle: number | null = null; // direction from grid root to homes centroid
+  // Beams from grid root to cyber homes
+  private beamGroup: THREE.Group = new THREE.Group();
+  // Debug axis visualisation
+  private axisGroup: THREE.Group = new THREE.Group();
+  // no stored references needed (recreated each update)
   // Smooth transitions
   private prevPositions: Map<string, THREE.Vector3> = new Map();
-  // Highway anchors by key for live tracking
+  // Beam anchors by key for live tracking
   private cyberHomeKeys: string[] = [];
-  private gridPrimaryKeys: string[] = [];
   private gridRootKey: string | null = null;
-  private highwayAnchorSum: number = 0;
+  private beamAnchorSum: number = 0;
+  private gridPrimaryKeys: string[] = [];
+  private gridChildrenAxis: THREE.Vector3 | null = null; // set when placing grid children
   // City grid parameters removed (using circle packing)
   
   // Color scheme for different directory types
@@ -68,8 +69,10 @@ export class FilesystemVisualizer {
     this.scene.add(this.rootGroup);
     // Contain all links in a dedicated group so we can clear them reliably
     this.rootGroup.add(this.linkGroup);
-    // Highways layer under links and agents
-    this.rootGroup.add(this.highwayGroup);
+    // Beam layer under links and agents
+    this.rootGroup.add(this.beamGroup);
+    // Axis debug group (always on top of grid)
+    this.rootGroup.add(this.axisGroup);
     
     // Base geometries for towers and files
     this.towerGeometry = new THREE.BoxGeometry(4, 1, 4);
@@ -183,13 +186,10 @@ export class FilesystemVisualizer {
     
     // Clear existing towers
     this.clearTowers();
-    // Reset cached positions for highways
-    this.cyberHomePositions = [];
-    this.gridPrimaryPositions = [];
-    // No longer track static positions; use live keys
+    // Reset cached keys for beams
     this.cyberHomeKeys = [];
-    this.gridPrimaryKeys = [];
     this.gridRootKey = null;
+    this.gridPrimaryKeys = [];
     // Instanced links disabled; using simple tubes
     
     // Create grid directory structure (main visualization)
@@ -209,32 +209,61 @@ export class FilesystemVisualizer {
       const cyberPositions = this.calculateCyberHomePositions(this.filesystemStructure.cyber_homes.length);
       this.filesystemStructure.cyber_homes.forEach((cyberHome, index) => {
         const towerName = cyberHome.name; // show raw name
-        const group = this.createCyberHomeTower(cyberHome, cyberPositions[index], towerName);
-        this.cyberHomePositions.push(group.position.clone());
+        this.createCyberHomeTower(cyberHome, cyberPositions[index], towerName);
         this.cyberHomeKeys.push(cyberHome.name);
       });
     }
 
     // No instanced link finalization needed
 
-    // Build highways to frame major areas (from live positions)
-    this.createHighways();
+    // Build beams to link grid root to each cyber home
+    this.createGridHomeBeams();
   }
   
-  // Calculate positions for cyber home directories in a circle behind the grid
+  // Calculate positions for cyber home directories equally spaced on the
+  // hemisphere opposite the grid children's hemisphere. This derives an
+  // orientation from the actual grid children positions so the arc truly
+  // mirrors their side.
   private calculateCyberHomePositions(cyberCount: number): THREE.Vector3[] {
     const positions: THREE.Vector3[] = [];
-    const radius = 60;
-    const centerZ = 40;
+    const radius = 60;               // distance from origin
     
+    // Compute children/home axial directions from grid basis
+    const { vHome } = this.getGridAxes();
+    const vOpp = vHome; // homes face opposite of children
+    const u = new THREE.Vector3(-vOpp.z, 0, vOpp.x).normalize();
+
+    // Evenly distribute across a 180° arc centered on vOpp, i.e. theta in
+    // [-pi/2, +pi/2]. This guarantees we occupy the opposite hemisphere.
     for (let i = 0; i < cyberCount; i++) {
-      const angle = (i / cyberCount) * Math.PI * 2;
-      const x = Math.cos(angle) * radius;
-      const z = Math.sin(angle) * radius + centerZ;
-      positions.push(new THREE.Vector3(x, 0, z));
+      const t = (i + 0.5) / Math.max(1, cyberCount); // (0,1]
+      const ang = (t - 0.5) * Math.PI;               // [-pi/2, +pi/2]
+      const pos = new THREE.Vector3()
+        .addScaledVector(vOpp, Math.cos(ang) * radius)
+        .addScaledVector(u,    Math.sin(ang) * radius);
+      positions.push(new THREE.Vector3(pos.x, 0, pos.z));
     }
     
     return positions;
+  }
+
+  private getGridAxes(): { vChild: THREE.Vector3; vHome: THREE.Vector3 } {
+    // Default: children at -Z, homes at +Z
+    let vChild = this.gridChildrenAxis ? this.gridChildrenAxis.clone() : new THREE.Vector3(0, 0, -1);
+    const root = this.gridRootKey ? this.towers.get(this.gridRootKey) : null;
+    const primPts: THREE.Vector3[] = this.gridPrimaryKeys
+      .map(k => this.towers.get(k)?.position.clone())
+      .filter((p): p is THREE.Vector3 => !!p);
+    if (root && primPts.length > 0) {
+      const sum = new THREE.Vector3();
+      for (const p of primPts) {
+        const d = p.clone().sub(root.position).setY(0);
+        if (d.lengthSq() > 0) sum.add(d.normalize());
+      }
+      if (sum.lengthSq() > 1e-6) vChild.copy(sum.normalize());
+    }
+    const vHome = vChild.clone().multiplyScalar(-1);
+    return { vChild: vChild.normalize(), vHome: vHome.normalize() };
   }
   
   // Clear all existing towers
@@ -281,7 +310,7 @@ export class FilesystemVisualizer {
     this.occupiedPositions = [];
     this.circleRadii.clear();
     this.clearLinks();
-    this.clearHighways();
+    this.clearBeams();
   }
 
   // Register a tower/subtree footprint as occupied
@@ -436,7 +465,6 @@ export class FilesystemVisualizer {
       this.gridRootKey = pathKey;
     }
     if (depth === 1 && ((directory.path || '').replace(/^\//,'').startsWith('grid/'))) {
-      this.gridPrimaryPositions.push(adjustedPos.clone());
       this.gridPrimaryKeys.push(pathKey);
     }
     
@@ -516,12 +544,16 @@ export class FilesystemVisualizer {
     // distribute them along a rectangular loop (like buildings off a highway).
     const parentId = (parentPathOrName || '').toLowerCase();
     if (depth === 0 && (parentId === 'grid' || parentId.endsWith('/grid'))) {
-      // Place direct children of grid on a semicircle away from trunk
+      // Place direct children of grid on a fixed semicircle (away from +Z)
       const center = parentPosition;
-      const meanAway = ((this.trunkAngle ?? 0) + Math.PI);
-      const start = meanAway - Math.PI / 2;
-      const end = meanAway + Math.PI / 2;
+      const meanAway = Math.PI; // face toward -Z hemisphere (basis forward)
+      const offset = Math.PI / 2; // rotate +90° to correct quadrant
+      const start = meanAway - Math.PI / 2 + offset;
+      const end = meanAway + Math.PI / 2 + offset;
       const rBase = Math.max(16, Math.max(...childRadii) + 10);
+      // Capture children axis for debugging and to mirror homes
+      const mid = (start + end) * 0.5;
+      this.gridChildrenAxis = new THREE.Vector3(Math.cos(mid), 0, Math.sin(mid)).normalize();
       const placed: { x: number; z: number; r: number }[] = [];
       for (let i = 0; i < childCount; i++) {
         const t = (i + 0.5) / childCount;
@@ -789,10 +821,10 @@ export class FilesystemVisualizer {
   }
 
   // ----- Highways: glowing rectangles to segment major areas -----
-  private clearHighways(): void {
-    // Remove and dispose all highway meshes/lines
-    this.highwayGroup.children.slice().forEach(child => {
-      this.highwayGroup.remove(child);
+  private clearBeams(): void {
+    // Remove and dispose all beam meshes
+    this.beamGroup.children.slice().forEach(child => {
+      this.beamGroup.remove(child);
       child.traverse((obj: any) => {
         if (obj.isMesh || obj.isLine) {
           obj.geometry?.dispose?.();
@@ -804,137 +836,62 @@ export class FilesystemVisualizer {
     });
   }
 
-  private createHighways(): void {
-    this.rebuildHighwaysFromLive();
-  }
+  
 
-  private rebuildHighwaysFromLive(): void {
-    // Compute movement signature
+  // computeCentroid helper removed (unused)
+  
+  private rebuildGridHomeBeamsFromLive(): void {
     let sum = 0;
     const grid = this.gridRootKey ? this.towers.get(this.gridRootKey) : null;
     if (grid) sum += grid.position.x + grid.position.z;
     for (const k of this.cyberHomeKeys) { const g = this.towers.get(k); if (g) sum += g.position.x + g.position.z; }
-    for (const k of this.gridPrimaryKeys) { const g = this.towers.get(k); if (g) sum += g.position.x + g.position.z; }
-    if (Math.abs(sum - this.highwayAnchorSum) < 0.001 && this.highwayGroup.children.length > 0) return;
-    this.highwayAnchorSum = sum;
-
-    this.clearHighways();
-    const gridPos = grid ? grid.position.clone() : null;
-    const homes = this.cyberHomeKeys.map(k => this.towers.get(k)?.position.clone()).filter(Boolean) as THREE.Vector3[];
-    if (gridPos && homes.length > 0) {
-      const centroid = this.computeCentroid(homes);
-      this.trunkAngle = Math.atan2(centroid.z - gridPos.z, centroid.x - gridPos.x);
-      this.addHighwayStrip(gridPos, centroid, 14, 0x00aaff, 2.0);
-      // Offramps to each home
-      for (const h of homes) {
-        const proj = this.nearestPointOnSegment(gridPos, centroid, h);
-        // Extra overlap so the ramp visually fuses with the trunk
-        this.addHighwayStrip(proj, new THREE.Vector3(h.x, 0.03, h.z), 4.5, 0x00aaff, 2.0);
-        // Junction pad to guarantee a visible connection
-        this.addHighwayJunction(proj, 5.0, 0x00aaff);
-      }
-    }
-
-    if (gridPos && this.gridPrimaryKeys.length > 0) {
-      const prims = this.gridPrimaryKeys.map(k => this.towers.get(k)?.position.clone()).filter(Boolean) as THREE.Vector3[];
-      if (prims.length > 0) {
-        const distances = prims.map(p => p.distanceTo(gridPos));
-        const rArc = Math.max(18, Math.min(...distances) - 6);
-        const meanAway = (this.trunkAngle ?? 0) + Math.PI;
-        const start = meanAway - Math.PI / 2;
-        const end = meanAway + Math.PI / 2;
-        const segments = 20;
-        const color = 0x00ffaa;
-        const lane = 8;
-        let prev = new THREE.Vector3(gridPos.x + Math.cos(start) * rArc, 0.03, gridPos.z + Math.sin(start) * rArc);
-        for (let i = 1; i <= segments; i++) {
-          const t = start + (i / segments) * (end - start);
-          const cur = new THREE.Vector3(gridPos.x + Math.cos(t) * rArc, 0.03, gridPos.z + Math.sin(t) * rArc);
-          this.addHighwayStrip(prev.clone(), cur.clone(), lane, color, 1.5);
-          prev = cur;
-        }
-        for (const p of prims) {
-          const ang = Math.atan2(p.z - gridPos.z, p.x - gridPos.x);
-          const clamped = Math.min(end, Math.max(start, ang));
-          const arcPt = new THREE.Vector3(gridPos.x + Math.cos(clamped) * rArc, 0.03, gridPos.z + Math.sin(clamped) * rArc);
-          this.addHighwayStrip(arcPt, new THREE.Vector3(p.x, 0.03, p.z), 5.5, color, 1.5);
-          this.addHighwayJunction(arcPt, 5.5, color);
-        }
+    if (Math.abs(sum - this.beamAnchorSum) < 0.001 && this.beamGroup.children.length > 0) return;
+    this.beamAnchorSum = sum;
+    this.createGridHomeBeams();
+    this.updateGridAxisDebug();
   }
+
+  private createGridHomeBeams(): void {
+    this.clearBeams();
+    if (!this.gridRootKey) return;
+    const grid = this.towers.get(this.gridRootKey);
+    if (!grid) return;
+    const start = grid.position.clone();
+    const startY = this.getTowerHeight(this.gridRootKey) ?? 8;
+    start.y = startY;
+    const color = 0xff8800; // orange beam
+    for (const key of this.cyberHomeKeys) {
+      const home = this.towers.get(key);
+      if (!home) continue;
+      const end = home.position.clone();
+      const endY = this.getTowerHeight(key) ?? 8;
+      end.y = endY;
+      this.createConnectionTube(start, end, color, 0.9, this.beamGroup);
     }
   }
 
-  private computeCentroid(points: THREE.Vector3[]): THREE.Vector3 {
-    const c = new THREE.Vector3();
-    if (points.length === 0) return c;
-    points.forEach(p => c.add(p));
-    c.multiplyScalar(1 / points.length);
-    c.y = 0.03;
-    return c;
+  // Draw child/home axis for debugging
+  private updateGridAxisDebug(): void {
+    // Clear existing
+    this.axisGroup.children.slice().forEach(c => { this.axisGroup.remove(c); (c as any).geometry?.dispose?.(); (c as any).material?.dispose?.(); });
+    if (!this.gridRootKey) return;
+    const root = this.towers.get(this.gridRootKey);
+    if (!root) return;
+    const { vChild, vHome } = this.getGridAxes();
+    const len = 40;
+    const y = (this.getTowerHeight(this.gridRootKey) ?? 8);
+    const start = new THREE.Vector3(root.position.x, y, root.position.z);
+    const mk = (dir: THREE.Vector3, color: number) => {
+      const end = start.clone().add(dir.clone().multiplyScalar(len));
+      const geo = new THREE.BufferGeometry().setFromPoints([start, end]);
+      const mat = new THREE.LineBasicMaterial({ color, linewidth: 2 });
+      const line = new THREE.Line(geo, mat);
+      this.axisGroup.add(line);
+    };
+    mk(vChild, 0x00ffff); // cyan child axis
+    mk(vHome,  0xff8800); // orange home axis
   }
-
-  private addHighwayStrip(start: THREE.Vector3, end: THREE.Vector3, width: number, color: number, overlap: number = 0) {
-    // Wide glowing strip with edge lines, all coplanar with ground
-    const dir = new THREE.Vector3().subVectors(end, start);
-    const len = dir.length();
-    if (len < 0.001) return;
-
-    // Extend the segment a little so neighbors overlap and appear connected
-    const n = dir.clone().normalize();
-    const ext = Math.max(0, overlap);
-    const startEx = start.clone().sub(n.clone().multiplyScalar(ext));
-    const endEx = end.clone().add(n.clone().multiplyScalar(ext));
-    const center = new THREE.Vector3().addVectors(startEx, endEx).multiplyScalar(0.5);
-    const extLen = startEx.distanceTo(endEx);
-    const y = 0.03;
-    center.y = y; start.y = y; end.y = y;
-    // angle not used (quaternion alignment below)
-
-    const group = new THREE.Group();
-    group.position.copy(center);
-    // Use a very thin box to avoid plane orientation ambiguities
-    const boxGeom = new THREE.BoxGeometry(extLen, 0.02, width);
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1.0, depthWrite: false });
-    const strip = new THREE.Mesh(boxGeom, mat);
-    group.add(strip);
-
-    // Edge lines along the two long sides
-    const halfW = width / 2;
-    const halfL = extLen / 2;
-    const edgeGeom = new THREE.BufferGeometry();
-    edgeGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
-      -halfL, 0.011, -halfW,  halfL, 0.011, -halfW,
-      -halfL, 0.011,  halfW,  halfL, 0.011,  halfW,
-    ]), 3));
-    const edgeMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
-    const edges = new THREE.LineSegments(edgeGeom, edgeMat);
-    group.add(edges);
-
-    // Orient strip so its local +X axis aligns with ground-plane direction
-    const dirFlat = new THREE.Vector3(endEx.x - startEx.x, 0, endEx.z - startEx.z).normalize();
-    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), dirFlat);
-    group.quaternion.copy(q);
-    group.position.y = y + 0.001;
-    this.highwayGroup.add(group);
-  }
-
-  private addHighwayJunction(center: THREE.Vector3, size: number, color: number) {
-    const padGeom = new THREE.BoxGeometry(size, 0.025, size);
-    const padMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1.0, depthWrite: false });
-    const pad = new THREE.Mesh(padGeom, padMat);
-    pad.position.set(center.x, 0.031, center.z);
-    this.highwayGroup.add(pad);
-  }
-
-  // Removed rectangular helper (now using semicircle for grid)
-
-  private nearestPointOnSegment(a: THREE.Vector3, b: THREE.Vector3, p: THREE.Vector3): THREE.Vector3 {
-    const ap = new THREE.Vector3().subVectors(p, a);
-    const ab = new THREE.Vector3().subVectors(b, a);
-    const ab2 = ab.lengthSq();
-    const t = ab2 > 0 ? Math.max(0, Math.min(1, ap.dot(ab) / ab2)) : 0;
-    return new THREE.Vector3().copy(a).add(ab.multiplyScalar(t)).setY(0.03);
-  }
+  // Highway helpers removed
   
   // Create connection lines between parent and child directories
   private createConnectionLine(
@@ -1317,8 +1274,8 @@ export class FilesystemVisualizer {
 
   update() {
     this.time += 0.01;
-    // Rebuild highways if anchors moved (keeps connections during transitions)
-    this.rebuildHighwaysFromLive();
+    // Rebuild beams if anchors moved (keeps connections during transitions)
+    this.rebuildGridHomeBeamsFromLive();
     
     // Animate towers
     this.towers.forEach((tower, name) => {
