@@ -100,8 +100,8 @@ export class AutomaticMode extends Mode {
         this.context.autoInfoWindow.setDock('bottom-left');
         this.context.autoInfoWindow.selectCyber(firstTarget);
         this.context.autoInfoWindow.setFollowButtonVisible(false);
-        // Keep action bar visible so the TTS "Read" button is available
-        this.context.autoInfoWindow.setActionBarVisible(true);
+        // Hide action bar entirely for auto panel
+        this.context.autoInfoWindow.setActionBarVisible(false);
       }
     }
     
@@ -289,8 +289,8 @@ export class AutomaticMode extends Mode {
         if (this.context.autoInfoWindow) {
           this.context.autoInfoWindow.setDock('bottom-left');
           this.context.autoInfoWindow.selectCyber(target);
-          // Keep action bar visible so TTS button is accessible
-          this.context.autoInfoWindow.setActionBarVisible(true);
+          // Keep action bar hidden in auto panel
+          this.context.autoInfoWindow.setActionBarVisible(false);
         }
         this.executeCyberFocusShot(target);
       }
@@ -467,6 +467,9 @@ export class AutomaticMode extends Mode {
     `;
     
     document.body.appendChild(this.streamOverlay);
+    // Reduce overall size for stream overlay
+    this.streamOverlay.style.transform = 'scale(0.75)';
+    this.streamOverlay.style.transformOrigin = 'top left';
   }
 
   private ensureGlobalStyles(): void {

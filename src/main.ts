@@ -626,8 +626,9 @@ function createModeSelectorUI() {
     font-family: 'Courier New', monospace;
     transition: opacity 0.35s ease, transform 0.35s ease;
     opacity: 1;
-    transform: translateY(0);
+    transform: scale(0.75) translateY(0);
     pointer-events: auto;
+    transform-origin: bottom right;
   `;
 
   const mkBtn = (label: string, mode: AppMode) => {
@@ -683,13 +684,13 @@ function createModeSelectorUI() {
 function showModeSelector() {
   if (!__modeUiEl) return;
   __modeUiEl.style.opacity = '1';
-  __modeUiEl.style.transform = 'translateY(0)';
+  __modeUiEl.style.transform = 'scale(0.75) translateY(0)';
   __modeUiEl.style.pointerEvents = 'auto';
 }
 
 function hideModeSelector() {
   if (!__modeUiEl) return;
   __modeUiEl.style.opacity = '0';
-  __modeUiEl.style.transform = 'translateY(8px)';
+  __modeUiEl.style.transform = 'scale(0.75) translateY(8px)';
   __modeUiEl.style.pointerEvents = 'none';
 }

@@ -89,6 +89,8 @@ export class CyberInfoWindow {
       overflow: hidden;
       display: none;
       flex-direction: column;
+      transform: scale(0.75);
+      transform-origin: top right;
     `;
     
     this.setupWindow();
@@ -108,11 +110,13 @@ export class CyberInfoWindow {
       this.container.style.bottom = '0px';
       this.container.style.right = 'auto';
       this.container.style.top = 'auto';
+      this.container.style.transformOrigin = 'bottom left';
     } else {
       this.container.style.right = '20px';
       this.container.style.top = '80px';
       this.container.style.left = 'auto';
       this.container.style.bottom = 'auto';
+      this.container.style.transformOrigin = 'top right';
     }
   }
 
@@ -499,13 +503,13 @@ export class CyberInfoWindow {
     const btnTtsTest = this.container.querySelector('#btn-tts-test') as HTMLButtonElement | null;
 
     if (this.variant === 'automatic') {
-      // Keep a minimal surface for broadcast view
+      // Minimal auto panel: no controls, hide entire action bar
       if (btnFollow) btnFollow.style.display = 'none';
       if (btnMessage) btnMessage.style.display = 'none';
       if (btnRefresh) btnRefresh.style.display = 'none';
-      if (btnTts) btnTts.style.display = '';
-      if (btnTtsTest) btnTtsTest.style.display = '';
-      if (actionBar) actionBar.style.display = 'flex';
+      if (btnTts) btnTts.style.display = 'none';
+      if (btnTtsTest) btnTtsTest.style.display = 'none';
+      if (actionBar) actionBar.style.display = 'none';
     } else {
       // Full controls for interactive mode
       if (btnFollow) btnFollow.style.display = '';

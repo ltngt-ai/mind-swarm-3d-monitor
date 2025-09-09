@@ -352,6 +352,8 @@ export class UserMode extends Mode {
       min-width: 250px;
       display: none;
       z-index: 500;
+      transform: scale(0.75);
+      transform-origin: bottom left;
     `;
     
     document.body.appendChild(this.cyberInfo);
@@ -373,6 +375,8 @@ export class UserMode extends Mode {
       font-size: 11px;
       display: none;
       z-index: 500;
+      transform: scale(0.75);
+      transform-origin: top right;
     `;
     
     this.controlsHelp.innerHTML = `
