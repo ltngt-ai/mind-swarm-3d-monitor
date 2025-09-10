@@ -2,7 +2,6 @@ import { WebSocketClient } from '../WebSocketClient';
 import { AgentManager } from '../AgentManager';
 import { CameraController, CameraMode } from '../camera/CameraController';
 import { config } from '../config';
-import logger from '../utils/logger';
 
 export type InfoWindowVariant = 'automatic' | 'interactive';
 
@@ -34,6 +33,19 @@ export class CyberInfoWindow {
   private selectedCycle: number = 999;  // Start high to indicate not yet set
   private selectedStage: string = 'reflection';
   private cycleData: Map<number, CycleData> = new Map();
+  // When true, user has explicitly selected a non-live cycle.
+  // Avoid auto-jumping selection to the latest when this is set.
+  private userPinnedCycle: boolean = false;
+  // Track last rendered reflection per cycle to avoid misleading updates
+  private lastRenderedReflectionByCycle: Map<number, string> = new Map();
+  // Debug flag to reduce log spam unless ?debug=1/true
+  private debug: boolean = (() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      const v = (p.get('debug') || '').toLowerCase();
+      return v === '1' || v === 'true' || p.has('debug');
+    } catch { return false; }
+  })();
   
   private isDragging = false;
   private dragStartX = 0;
@@ -102,6 +114,11 @@ export class CyberInfoWindow {
     
     // Listen for WebSocket events
     this.setupEventListeners();
+
+    // Unconditional startup breadcrumb so you can verify the correct file is active
+    try {
+      console.info('[InfoPanel] Initialized', { variant: this.variant, debug: this.debug });
+    } catch {}
   }
 
   // Dock the window to a screen corner with default offsets
@@ -360,7 +377,10 @@ export class CyberInfoWindow {
         flex-shrink: 0;
       ">
         <span id="status-text">Ready</span>
-        <span id="last-update">--:--:--</span>
+        <span>
+          <span id="content-updated" style="margin-right: 12px;">—</span>
+          <span id="last-update">--:--:--</span>
+        </span>
       </div>
       
       <!-- Resize Handle -->
@@ -473,6 +493,8 @@ export class CyberInfoWindow {
       }
       
       this.selectedCycle = newCycle;
+      this.userPinnedCycle = true; // user typed a specific cycle
+      this.log('User typed cycle', this.selectedCycle);
       target.value = this.selectedCycle.toString();  // Update input if clamped
       this.fetchCycleData(this.selectedCycle);
     });
@@ -581,10 +603,14 @@ export class CyberInfoWindow {
   private setupEventListeners() {
     // Listen for fast current cycle response
     this.wsClient.on('current_cycle', (data: any) => {
-      logger.debug('Received current_cycle (fast):', data);
+      this.log('Received current_cycle (fast):', data);
       if (data.cyber === this.selectedCyber && data.cycle_number) {
         this.currentCycle = data.cycle_number;
-        this.selectedCycle = data.cycle_number;
+        // Only auto-select the live cycle if we're not pinned by the user,
+        // it's initial load, or follow mode is enabled.
+        if (this.selectedCycle >= 999 || this.selectedCycle <= 0 || this.isFollowing || !this.userPinnedCycle) {
+          this.selectedCycle = data.cycle_number;
+        }
         
         // Update the input field
         const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
@@ -595,51 +621,65 @@ export class CyberInfoWindow {
         this.updateCycleStatus();
         this.updateStatus('');
         
-        // Now fetch the actual cycle data
+        // Now fetch the actual cycle data for the selected cycle
         this.fetchCycleData(this.selectedCycle);
       }
     });
     
     // Listen for cycle data responses
     this.wsClient.on('cycle_data', (data: any) => {
-      logger.debug('Received cycle_data:', data);
+      this.log('Received cycle_data:', data);
       if (data.cyber === this.selectedCyber && data.cycle_number !== undefined) {
-        // Check what stages are in the data
+        // Check what stages are in the incoming payload
         const stages = data.data ? Object.keys(data.data) : [];
-        logger.debug(`Cycle ${data.cycle_number} has stages:`, stages);
-        
-        // Check if cycle is complete by looking at metadata
-        const metadata = data.data?.metadata;
-        const isComplete = metadata?.status === 'completed';
-        
-        // Only cache if we have valid data with all main stages or if marked complete
-        // We need all 4 main stages for a complete cycle
-        const mainStages = ['observation', 'decision', 'execution', 'reflection'];
-        const hasAllMainStages = mainStages.every(stage => stages.includes(stage));
-        
-        // Only cache if:
-        // 1. Cycle is marked as complete in metadata, OR
-        // 2. We have ALL 4 main stages (observation, decision, execution, reflection)
-        if (data.data && (isComplete || hasAllMainStages)) {
-          logger.debug(`Caching cycle ${data.cycle_number} (complete: ${isComplete}, hasAll: ${hasAllMainStages})`);
-          this.cycleData.set(data.cycle_number, data.data);
-        } else {
-          logger.warn(`Not caching incomplete cycle ${data.cycle_number}. Has: ${stages.join(', ')}, Complete: ${isComplete}`);
-          // Don't cache incomplete data
-          // If this is the current cycle and it's incomplete, schedule a retry
-          if (data.cycle_number === this.selectedCycle) {
-            logger.debug(`Cycle ${data.cycle_number} is incomplete, will retry in 1s...`);
-            setTimeout(() => {
-              // Only retry if still on the same cycle
-              if (this.selectedCycle === data.cycle_number) {
-                logger.debug(`Retrying cycle ${data.cycle_number}...`);
-                this.fetchCycleData(data.cycle_number, true);
+        this.log(`Cycle ${data.cycle_number} has stages:`, stages);
+
+        // Merge partial cycle data incrementally so we can render available stages immediately
+        if (data.data) {
+          const existing = this.cycleData.get(data.cycle_number) || {};
+          const incoming = data.data as Record<string, any>;
+          const merged: Record<string, any> = { ...existing };
+          for (const [k, v] of Object.entries(incoming)) {
+            if (v !== undefined && v !== null) {
+              merged[k] = v;
+            }
+          }
+          this.cycleData.set(data.cycle_number, merged as any);
+
+          // Reflection diagnostics for this cycle (debug only)
+          if (this.debug) {
+            try {
+              const ref = (merged as any).reflection;
+              if (ref === undefined) {
+                this.warn(`[diag] Cycle ${data.cycle_number}: reflection missing in merged payload`);
+              } else if (typeof ref === 'string') {
+                this.log(`[diag] Cycle ${data.cycle_number}: reflection is string (${ref.length} chars)`);
+              } else if (ref && typeof ref === 'object') {
+                const keys = Object.keys(ref);
+                const soKeys = ref.stage_output && typeof ref.stage_output === 'object' ? Object.keys(ref.stage_output) : [];
+                const odKeys = ref.output_data && typeof ref.output_data === 'object' ? Object.keys(ref.output_data) : [];
+                this.log(`[diag] Cycle ${data.cycle_number}: reflection keys:`, keys, 'stage_output keys:', soKeys, 'output_data keys:', odKeys);
+              } else {
+                this.warn(`[diag] Cycle ${data.cycle_number}: reflection present but unexpected type`, typeof ref);
               }
-            }, 1000);
+            } catch (e) {
+              this.warn('[diag] Failed to inspect reflection for cycle', data.cycle_number, e);
+            }
           }
         }
-        
-        if (data.cycle_number === this.selectedCycle && this.cycleData.has(data.cycle_number)) {
+
+        // If metadata indicates incomplete, retry soon; but keep showing last good content
+        const isComplete = (data.data?.metadata?.status === 'completed');
+        // Only auto-retry for the current live cycle
+        if (!isComplete && data.cycle_number === this.currentCycle) {
+          setTimeout(() => {
+            if (this.selectedCycle === data.cycle_number) {
+              this.fetchCycleData(data.cycle_number, true);
+            }
+          }, 1000);
+        }
+
+        if (data.cycle_number === this.selectedCycle) {
           this.displayStageData();
         }
       }
@@ -647,7 +687,7 @@ export class CyberInfoWindow {
     
     // Listen for cycles list response
     this.wsClient.on('cycles_list', (data: any) => {
-      logger.debug('Received cycles_list:', data);
+      this.log('Received cycles_list:', data);
       if (data.cyber === this.selectedCyber) {
         // If we have cycles data from index.json, use it
         if (data.cycles && data.cycles.length > 0) {
@@ -655,12 +695,14 @@ export class CyberInfoWindow {
             .map((c: any) => typeof c === 'number' ? c : c.cycle_number || 0)
             .filter((n: number) => n > 0);  // Skip cycle 0 as it's usually incomplete
           
-          logger.debug('Valid cycles found:', validCycles);
+          console.log('Valid cycles found:', validCycles);
           
           if (validCycles.length > 0) {
             this.currentCycle = Math.max(...validCycles);
-            this.selectedCycle = this.currentCycle;
-            logger.debug(`Set currentCycle to ${this.currentCycle}, selectedCycle to ${this.selectedCycle}`);
+            if (this.selectedCycle >= 999 || this.selectedCycle <= 0 || this.isFollowing || !this.userPinnedCycle) {
+              this.selectedCycle = this.currentCycle;
+            }
+            console.log(`Set currentCycle to ${this.currentCycle}, selectedCycle to ${this.selectedCycle}`);
           }
         }
         // If no cycles from index.json, we'll rely on current_reflection to give us the current cycle
@@ -680,7 +722,7 @@ export class CyberInfoWindow {
     
     // Listen for current reflection response (contains cycle info)
     this.wsClient.on('current_reflection', (data: any) => {
-      logger.debug('Received current_reflection:', data);
+      this.log('Received current_reflection:', data);
       if (data.cyber === this.selectedCyber) {
         // Get the actual cycle number from the response
         const cycleNum = data.cycle_number;
@@ -691,18 +733,18 @@ export class CyberInfoWindow {
           // Always set selectedCycle on initial load (when it's 999)
           if (this.selectedCycle >= 999) {
             this.selectedCycle = cycleNum;
-            logger.debug(`Setting selectedCycle to ${this.selectedCycle} from current_reflection`);
+            console.log(`Setting selectedCycle to ${this.selectedCycle} from current_reflection`);
           } else if (this.selectedCycle <= 0) {
             // Also handle the case where it might be 0 or negative
             this.selectedCycle = cycleNum;
-            logger.debug(`Setting selectedCycle to ${this.selectedCycle} from current_reflection (was <= 0)`);
+            console.log(`Setting selectedCycle to ${this.selectedCycle} from current_reflection (was <= 0)`);
           }
           
           // Update the input field
           const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
           if (cycleInput && this.selectedCycle > 0) {
             cycleInput.value = this.selectedCycle.toString();
-            logger.debug(`Updated cycle input to ${this.selectedCycle}`);
+            console.log(`Updated cycle input to ${this.selectedCycle}`);
           }
           
           this.updateCycleStatus();
@@ -713,25 +755,16 @@ export class CyberInfoWindow {
           }
         }
 
-        // If we are viewing Reflection, show the latest reflection text immediately to avoid stale content
-        if (this.selectedStage === 'reflection' && data.reflection) {
-          const contentEl = this.container.querySelector('#info-content') as HTMLElement | null;
-          if (contentEl) {
-            const text = typeof data.reflection === 'string' ? data.reflection : JSON.stringify(data.reflection);
-            contentEl.innerHTML = this.formatStageData(text);
-            this.updateStatus(`Showing reflection for cycle ${this.selectedCycle}`);
-            this.maybeAutoSpeakReflection(typeof data.reflection === 'string' ? data.reflection : undefined);
-          }
-        }
+        // Do not render reflection directly from this event; rely on get_cycle_data
       }
     });
     
     // Listen for cycle started events
     this.wsClient.on('cycle_started', (message: any) => {
-      logger.debug('Received cycle_started event:', message);
+      this.log('Received cycle_started event:', message);
       const data = message.data || message;  // Handle both nested and flat structures
       if (data.cyber === this.selectedCyber) {
-        logger.debug(`Cycle started for ${data.cyber}: ${data.cycle_number}, Following: ${this.isFollowing}`);
+        console.log(`Cycle started for ${data.cyber}: ${data.cycle_number}, Following: ${this.isFollowing}`);
         this.currentCycle = data.cycle_number;
         this.updateCycleStatus();
         // In follow mode, do NOT switch to the new cycle immediately to avoid showing loading
@@ -741,14 +774,14 @@ export class CyberInfoWindow {
     
     // Listen for cycle completed events (more reliable than cycle_started)
     this.wsClient.on('cycle_completed', (message: any) => {
-      logger.debug('Received cycle_completed event:', message);
+      this.log('Received cycle_completed event:', message);
       const data = message.data || message;  // Handle both nested and flat structures
       if (data.cyber === this.selectedCyber) {
-        logger.debug(`Cycle completed for ${data.cyber}: ${data.cycle_number}, Following: ${this.isFollowing}`);
+        console.log(`Cycle completed for ${data.cyber}: ${data.cycle_number}, Following: ${this.isFollowing}`);
         this.currentCycle = data.cycle_number;
         this.updateCycleStatus();
         if (this.isFollowing) {
-          logger.debug(`Following mode active, showing completed cycle ${data.cycle_number}`);
+          console.log(`Following mode active, showing completed cycle ${data.cycle_number}`);
           this.selectedCycle = data.cycle_number;
           this.fetchCycleData(this.selectedCycle, true);  // Force refresh to get complete data
           
@@ -871,47 +904,65 @@ export class CyberInfoWindow {
     const contentEl = this.container.querySelector('#info-content') as HTMLElement;
     const cycleData = this.cycleData.get(this.selectedCycle);
     
-    logger.debug(`Displaying stage ${this.selectedStage} for cycle ${this.selectedCycle}`, cycleData);
+    this.log(`Displaying stage ${this.selectedStage} for cycle ${this.selectedCycle}`, cycleData);
     
     if (!cycleData) {
       // Do not replace content with a loading message; keep last shown content
       // Especially when selectedCycle is the live cycle, avoid flicker
-      this.updateStatus(this.selectedCycle === this.currentCycle ? 'Awaiting latest cycle...' : 'Waiting for data...');
+      this.updateStatus(this.selectedCycle === this.currentCycle ? 'Awaiting latest cycle...' : `Waiting for cycle ${this.selectedCycle} data...`);
       return;
     }
     
     const stageData = cycleData[this.selectedStage as keyof CycleData];
     if (!stageData) {
-      contentEl.innerHTML = `
-        <div style="color: #666; text-align: center; padding: 20px;">
-          No data for ${this.selectedStage} stage in cycle ${this.selectedCycle}
-        </div>
-      `;
+      // Keep previously shown content; just update the status subtly
+      this.updateStatus(this.selectedCycle === this.currentCycle
+        ? `Awaiting ${this.selectedStage} for cycle ${this.selectedCycle}…`
+        : `No ${this.selectedStage} yet for cycle ${this.selectedCycle}`);
       return;
     }
     
     // Format and display the stage data
-    contentEl.innerHTML = this.formatStageData(stageData);
-    this.updateStatus(`Showing ${this.selectedStage} from cycle ${this.selectedCycle}`);
-    // Auto-speak reflection when it changes
     if (this.selectedStage === 'reflection') {
-      this.maybeAutoSpeakReflection();
+      const text = this.extractReflectionText(stageData);
+      if (text && text.trim().length > 0) {
+        const normalized = text.replace(/\r\n/g, '\n').trim();
+        const last = this.lastRenderedReflectionByCycle.get(this.selectedCycle) || '';
+        if (last.replace(/\r\n/g, '\n').trim() === normalized) {
+          this.updateStatus(`Reflection unchanged for cycle ${this.selectedCycle}`);
+          return;
+        }
+        this.lastRenderedReflectionByCycle.set(this.selectedCycle, normalized);
+        this.log(`Render reflection cycle ${this.selectedCycle} len=${normalized.length} hash=${this.hashString(normalized)}`);
+        contentEl.innerHTML = this.formatStageData(text);
+        this.updateContentTimestamp();
+        this.updateStatus(`Showing ${this.selectedStage} from cycle ${this.selectedCycle}`);
+        this.maybeAutoSpeakReflection(text);
+      } else {
+        // Diagnostics: reflection stage has data but no extractable text
+        if (this.debug) {
+          try {
+            const snapshot = typeof stageData === 'object' ? JSON.stringify(stageData).slice(0, 500) : String(stageData);
+            console.warn(`[diag] No extractable reflection text for cycle ${this.selectedCycle}. Stage data snapshot:`, snapshot);
+          } catch {}
+        }
+        // Do not overwrite valid previous content with an empty/placeholder reflection
+        this.updateStatus(this.selectedCycle === this.currentCycle
+          ? `Awaiting reflection for cycle ${this.selectedCycle}…`
+          : `No reflection found for cycle ${this.selectedCycle}`);
+        return;
+      }
+    } else {
+      contentEl.innerHTML = this.formatStageData(stageData);
+      this.updateContentTimestamp();
+      this.updateStatus(`Showing ${this.selectedStage} from cycle ${this.selectedCycle}`);
     }
   }
   
   private formatStageData(data: any): string {
-    // Reflection: show only the cycle summary, no metadata/JSON dumps
+    // Reflection: show only the cycle summary/insights, no metadata/JSON dumps
     if (this.selectedStage === 'reflection') {
-      let summary: any = null;
-      if (typeof data === 'string') {
-        summary = data;
-      } else if (data) {
-        summary = (data as any).cycle_summary
-          || (data.stage_output && ((data.stage_output as any).cycle_summary || (data.stage_output as any).summary))
-          || (data as any).summary
-          || null;
-      }
-      const text = typeof summary === 'string' ? summary : 'No summary available yet.';
+      const text = this.extractReflectionText(data) || 'No summary available yet.';
       return `<div class="stage-output" style="font-size: 28px; line-height: 1.6;">
         <pre style="white-space: pre-wrap; word-wrap: break-word; line-height: 1.6;">${this.escapeHtml(text)}</pre>
       </div>`;
@@ -1126,6 +1177,9 @@ export class CyberInfoWindow {
   
   private navigateCycle(direction: number) {
     this.selectedCycle += direction;
+    // User manually navigated; pin selection
+    this.userPinnedCycle = true;
+    this.log('User navigated to cycle', this.selectedCycle);
     
     // Clamp to valid range (1 to currentCycle)
     if (this.selectedCycle < 1) {
@@ -1146,6 +1200,9 @@ export class CyberInfoWindow {
   
   private goToCurrentCycle() {
     if (this.selectedCyber) {
+      // Unpin selection; we want to jump to live
+      this.userPinnedCycle = false;
+      this.log('Jumping to current cycle');
       // First request cycles list to get the latest valid cycle
       this.wsClient.send({
         type: 'get_cycles',
@@ -1168,27 +1225,19 @@ export class CyberInfoWindow {
     
     // Don't fetch invalid cycle numbers
     if (cycleNumber <= 0 || cycleNumber >= 999) {
-      logger.warn(`Skipping fetch for invalid cycle number: ${cycleNumber}`);
+      this.warn(`Skipping fetch for invalid cycle number: ${cycleNumber}`);
       return;
     }
     
-    // Check cache first (unless forcing refresh)
+    // Check cache first (unless forcing refresh). If we have anything cached, show it immediately.
     if (!forceRefresh && this.cycleData.has(cycleNumber)) {
       const cachedData = this.cycleData.get(cycleNumber);
-      // Check if cached data has ALL main stages or is marked complete
       const stages = Object.keys(cachedData || {});
-      const mainStages = ['observation', 'decision', 'execution', 'reflection'];
-      const hasAllMainStages = mainStages.every(stage => stages.includes(stage));
       const isComplete = cachedData?.metadata?.status === 'completed';
-      
-      if (isComplete || hasAllMainStages) {
-        logger.debug(`Using cached data for cycle ${cycleNumber} (complete: ${isComplete}, stages: ${stages.join(', ')})`);
-        this.displayStageData();
-        return;
-      } else {
-        logger.debug(`Cached data for cycle ${cycleNumber} is incomplete, re-fetching... Has: ${stages.join(', ')}`);
-        this.cycleData.delete(cycleNumber);  // Remove incomplete data
-      }
+      this.log(`Cached data present for cycle ${cycleNumber} (complete: ${isComplete}, stages: ${stages.join(', ')})`);
+      this.displayStageData();
+      // If complete, no need to refetch; otherwise fall through to request fresh data
+      if (isComplete) return;
     }
     
     // Request from server
@@ -1198,7 +1247,7 @@ export class CyberInfoWindow {
       cycle_number: cycleNumber,
       request_id: `cycle_${cycleNumber}_${Date.now()}`
     };
-    logger.debug('Requesting cycle data:', request);
+    this.log('Requesting cycle data:', request);
     this.wsClient.send(request);
     
     // Avoid heavy-handed 'Loading...' messaging; keep subtle
@@ -1273,7 +1322,7 @@ export class CyberInfoWindow {
   
   private openMessageDialog() {
     // TODO: Implement message dialog
-    logger.debug('Opening message dialog for', this.selectedCyber);
+    this.log('Opening message dialog for', this.selectedCyber);
     this.updateStatus('Message dialog not yet implemented');
   }
 
@@ -1448,7 +1497,7 @@ export class CyberInfoWindow {
         played = false;
         await this.ttsAudio.play().then(() => { played = true; }).catch((e) => {
           this.updateStatus('Audio playback blocked');
-          logger.warn('TTS blob play() failed', e);
+          console.warn('TTS blob play() failed', e);
         });
         if (!played) {
           // Give up cleanly and try next queued item
@@ -1547,16 +1596,7 @@ export class CyberInfoWindow {
     // Prefer structured cycle data if available
     const data = this.cycleData.get(this.selectedCycle) as any;
     let reflection = data?.reflection;
-    let text: string | null = null;
-    if (typeof reflection === 'string') {
-      text = reflection;
-    } else if (reflection) {
-      text = reflection.cycle_summary
-        || reflection.summary
-        || reflection.stage_output?.cycle_summary
-        || reflection.stage_output?.summary
-        || null;
-    }
+    let text: string | null = this.extractReflectionText(reflection);
     // Fallback to currently displayed content text
     if (!text) {
       const contentEl = this.container.querySelector('#info-content') as HTMLElement | null;
@@ -1566,6 +1606,37 @@ export class CyberInfoWindow {
       }
     }
     return text;
+  }
+
+  // Extract a human-readable reflection text from various server shapes
+  private extractReflectionText(data: any): string | null {
+    if (!data) return null;
+    if (typeof data === 'string') {
+      const s = data.trim();
+      return s.length > 0 ? s : null;
+    }
+    const candidate = (data as any).cycle_summary
+      || (data as any).insights
+      || (data as any).summary
+      || (data as any).text
+      || (data.output_data && (
+        (data.output_data as any).cycle_summary
+        || (data.output_data as any).insights
+        || (data.output_data as any).summary
+        || (data.output_data as any).text
+      ))
+      || (data.stage_output && (
+        (data.stage_output as any).cycle_summary
+        || (data.stage_output as any).insights
+        || (data.stage_output as any).summary
+        || (data.stage_output as any).text
+      ))
+      || null;
+    if (typeof candidate === 'string') {
+      const s = candidate.trim();
+      return s.length > 0 ? s : null;
+    }
+    return null;
   }
 
   // Speak reflection automatically when it changes
@@ -1639,6 +1710,24 @@ export class CyberInfoWindow {
     
     statusEl.textContent = message;
     timeEl.textContent = new Date().toLocaleTimeString();
+  }
+
+  // Record when content (not just status) changed
+  private updateContentTimestamp() {
+    const el = this.container.querySelector('#content-updated') as HTMLElement | null;
+    if (!el) return;
+    el.textContent = `Shown ${new Date().toLocaleTimeString()}`;
+  }
+
+  // Prefixed logging helpers for easy filtering in console
+  private log(...args: any[]) {
+    // Enable via ?debug=1 or at runtime: window.InfoPanelDebug = 1
+    const enabled = this.debug || (typeof window !== 'undefined' && (window as any).InfoPanelDebug);
+    if (!enabled) return;
+    try { console.log(`[InfoPanel/${this.variant}]`, ...args); } catch {}
+  }
+  private warn(...args: any[]) {
+    try { console.warn(`[InfoPanel/${this.variant}]`, ...args); } catch {}
   }
   
   public show() {

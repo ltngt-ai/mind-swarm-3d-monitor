@@ -294,47 +294,7 @@ wsClient.on('status_update', (data: any) => {
   }
 });
 
-// Handle cycle started events - fetch reflection for display
-wsClient.on('cycle_started', (data: any) => {
-  if (data.cyber && data.cycle_number) {
-    logger.debug(`Cycle ${data.cycle_number} started for ${data.cyber}, fetching reflection...`);
-    // Request the reflection from the previous cycle (cycle_number - 1)
-    if (data.cycle_number > 1) {
-      const requestId = `ref_${data.cyber}_${Date.now()}`;
-      wsClient.requestCurrentReflection(data.cyber, requestId);
-    }
-  }
-});
-
-// Handle reflection responses
-wsClient.on('current_reflection', (data: any) => {
-  if (data.cyber && data.reflection) {
-    // The server now sends the insights directly as a string
-    let reflectionText = data.reflection;
-    
-    // If it's still an object for some reason, extract insights
-    if (typeof reflectionText === 'object') {
-      reflectionText = reflectionText.insights || JSON.stringify(reflectionText);
-    }
-    
-    // Clean up multiline formatting
-    if (typeof reflectionText === 'string') {
-      // Remove leading "- " from bullet points for cleaner display
-      reflectionText = reflectionText.replace(/^- /gm, '• ');
-      // Truncate if too long
-      if (reflectionText.length > 300) {
-        reflectionText = reflectionText.substring(0, 297) + '...';
-      }
-    }
-    
-    logger.debug(`Showing reflection for ${data.cyber}:`, reflectionText);
-    agentManager.showThought(data.cyber, reflectionText);
-  } else if (data.cyber) {
-    // No reflection available yet
-    logger.debug(`No reflection available for ${data.cyber} yet`);
-    agentManager.showThought(data.cyber, 'Awaiting first reflection...');
-  }
-});
+// Reflection thought bubbles removed; InfoPanel (CyberInfoWindow) renders reflections via cycle data.
 
 wsClient.on('connected', () => {
   // Connection status handled by server selector now
@@ -407,9 +367,8 @@ async function fetchInitialStatus() {
             restlessness: (cyberData as any).restlessness,
             memory_pressure: (cyberData as any).memory_pressure
           });
-          
-          // Fetch initial reflection for each cyber
-          wsClient.requestCurrentReflection(name, `init_${name}_${Date.now()}`);
+      
+          // Reflection bubbles deprecated: InfoPanel handles reflections via cycle API now
         });
         // Status updates handled by CyberInfoWindow now
       } else {
