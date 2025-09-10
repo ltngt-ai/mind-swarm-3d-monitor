@@ -1,4 +1,5 @@
 import { parseEvent, EventEnvelope } from './ws/events';
+import logger from './utils/logger';
 
 type EventHandler = (data: any) => void;
 
@@ -24,7 +25,7 @@ export class WebSocketClient {
       this.ws = new WebSocket(this.url);
 
       this.ws.onopen = () => {
-        console.log('WebSocket connected');
+        logger.info('WebSocket connected');
         this.emit('connected', {});
         this.lastSeen = Date.now();
         
@@ -45,7 +46,7 @@ export class WebSocketClient {
           // Prefer typed envelope parsing
           const env: EventEnvelope | null = parseEvent(event.data);
           if (env && env.type) {
-            console.log('WebSocket message (typed):', env);
+            logger.debug('WebSocket message (typed):', env);
             this.lastSeen = Date.now();
             if (env.type === 'ping') {
               // Respond to server ping with client ping to trigger pong
@@ -58,24 +59,24 @@ export class WebSocketClient {
 
           // Fallback to raw JSON structure
           const message = JSON.parse(event.data);
-          console.log('WebSocket message:', message);
+          logger.debug('WebSocket message:', message);
           if (message && message.type) {
             this.lastSeen = Date.now();
             const eventData = message.data !== undefined ? message.data : message;
             this.emit(message.type, eventData);
           }
         } catch (error) {
-          console.error('Failed to parse WebSocket message:', error);
+          logger.error('Failed to parse WebSocket message:', error);
         }
       };
 
       this.ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
+        logger.error('WebSocket error:', error);
         this.emit('error', error);
       };
 
       this.ws.onclose = () => {
-        console.log('WebSocket disconnected');
+        logger.info('WebSocket disconnected');
         this.emit('disconnected', {});
         this.ws = null;
 
@@ -85,7 +86,7 @@ export class WebSocketClient {
         this.stopHeartbeat();
       };
     } catch (error) {
-      console.error('Failed to create WebSocket:', error);
+      logger.error('Failed to create WebSocket:', error);
       this.emit('error', error);
     }
   }
@@ -106,7 +107,7 @@ export class WebSocketClient {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
     } else {
-      console.error('WebSocket not connected');
+      logger.error('WebSocket not connected');
     }
   }
 
@@ -116,7 +117,7 @@ export class WebSocketClient {
       cyber: cyberName,
       request_id: requestId || `ref_${Date.now()}`
     };
-    console.log('Requesting reflection:', message);
+    logger.debug('Requesting reflection:', message);
     this.send(message);
   }
 
@@ -157,7 +158,7 @@ export class WebSocketClient {
     const jitter = Math.random() * 0.3 * exp; // up to 30% jitter
     const delay = Math.floor(exp * 0.85 + jitter); // spread a bit
     this.reconnectAttempts += 1;
-    console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+    logger.debug(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
     this.reconnectTimeout = setTimeout(() => {
       this.connect();
     }, delay);
@@ -175,7 +176,7 @@ export class WebSocketClient {
       this.watchdogInterval = setInterval(() => {
         const silentFor = Date.now() - this.lastSeen;
         if (silentFor > 30000) {
-          console.warn('WebSocket silent for >30s; restarting connection');
+          logger.warn('WebSocket silent for >30s; restarting connection');
           try { this.ws?.close(); } catch {}
         }
       }, 5000);

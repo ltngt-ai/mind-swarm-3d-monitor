@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import logger from './utils/logger';
 import { FilesystemNode, FilesystemStructure } from './types';
 import { config } from './config';
 
@@ -144,17 +145,17 @@ export class FilesystemVisualizer {
 
   // Fetch filesystem structure from backend API
   private async fetchFilesystemStructure(): Promise<void> {
-    console.log('Fetching filesystem structure from:', `${this.apiUrl}/filesystem/structure`);
+    logger.debug('Fetching filesystem structure from:', `${this.apiUrl}/filesystem/structure`);
     try {
       // Get the actual filesystem structure from the backend
       const response = await fetch(`${this.apiUrl}/filesystem/structure`);
-      console.log('Filesystem response status:', response.status, response.statusText);
+      logger.debug('Filesystem response status:', response.status, response.statusText);
       
       if (!response.ok) {
         // Backend not connected or endpoint not available
-        console.log('Backend not connected or filesystem endpoint unavailable. Status:', response.status);
+        logger.warn('Backend not connected or filesystem endpoint unavailable. Status:', response.status);
         const errorText = await response.text();
-        console.log('Error response:', errorText);
+        logger.warn('Error response:', errorText);
         this.filesystemStructure = null;
         this.showNotConnected();
         return;
@@ -162,14 +163,14 @@ export class FilesystemVisualizer {
       
       // Parse the real filesystem structure
       this.filesystemStructure = await response.json();
-      console.log('Fetched real filesystem structure:', this.filesystemStructure);
+      logger.debug('Fetched real filesystem structure:', this.filesystemStructure);
       
       // Update the visualization with the real grid structure
       this.updateVisualization();
       
     } catch (error) {
       // Connection failed - show NOT CONNECTED
-      console.error('Failed to fetch filesystem structure:', error);
+      logger.error('Failed to fetch filesystem structure:', error);
       this.filesystemStructure = null;
       this.showNotConnected();
     }
@@ -194,14 +195,14 @@ export class FilesystemVisualizer {
     
     // Create grid directory structure (main visualization)
     if (this.filesystemStructure.grid) {
-      console.log('Creating towers for grid structure:', this.filesystemStructure.grid);
+      logger.debug('Creating towers for grid structure:', this.filesystemStructure.grid);
       this.createDirectoryTower(
         this.filesystemStructure.grid,
         new THREE.Vector3(0, 0, -50), // Center position
         true, // Show subdirectories
         0 // Starting depth
       );
-      console.log('Tower positions created:', Array.from(this.towerPositions.keys()));
+      logger.debug('Tower positions created:', Array.from(this.towerPositions.keys()));
     }
     
     // Create minimal towers for each Cyber's personal root (backend provides list only)
@@ -1190,7 +1191,7 @@ export class FilesystemVisualizer {
     }
     
     if (tower) {
-      console.log(`Pulsing tower: ${foundName} for path: ${path}`);
+      logger.debug(`Pulsing tower: ${foundName} for path: ${path}`);
       const top = tower.children.find((child: any) => child.isMesh && child.name === 'top-glow') as THREE.Mesh | undefined;
       if (top) {
         const mat = top.material as THREE.MeshBasicMaterial;
@@ -1210,7 +1211,7 @@ export class FilesystemVisualizer {
         animate();
       }
     } else {
-      console.log(`No tower found for path: ${path}, tried: ${possibleNames.join(', ')}`);
+      logger.debug(`No tower found for path: ${path}, tried: ${possibleNames.join(', ')}`);
     }
   }
   
@@ -1429,7 +1430,7 @@ export class FilesystemVisualizer {
       for (const possiblePath of possiblePaths) {
         tower = this.towers.get(possiblePath);
         if (tower) {
-          console.log(`Found tower for path ${path} using pattern: ${possiblePath}`);
+          logger.debug(`Found tower for path ${path} using pattern: ${possiblePath}`);
           break;
         }
       }
@@ -1456,7 +1457,7 @@ export class FilesystemVisualizer {
         animate();
       }
     } else {
-      console.log(`No tower found to highlight for path: ${path}`);
+      logger.debug(`No tower found to highlight for path: ${path}`);
     }
   }
   

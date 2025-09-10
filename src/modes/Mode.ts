@@ -7,6 +7,7 @@ import { WebSocketClient } from '../WebSocketClient';
 import { CameraController } from '../camera/CameraController';
 import { eventBus, Events } from '../utils/EventBus';
 import { CyberInfoWindow } from '../ui/CyberInfoWindow';
+import logger from '../utils/logger';
 
 export interface ModeContext {
   scene: THREE.Scene;
@@ -43,7 +44,7 @@ export abstract class Mode {
   }
 
   async activate(): Promise<void> {
-    console.log(`Activating ${this.name} mode`);
+    logger.debug(`Activating ${this.name} mode`);
     this.isActive = true;
     
     // Create GUI folder for this mode
@@ -62,7 +63,7 @@ export abstract class Mode {
   }
 
   async deactivate(): Promise<void> {
-    console.log(`Deactivating ${this.name} mode`);
+    logger.debug(`Deactivating ${this.name} mode`);
     this.isActive = false;
     
     // Cleanup mode-specific stuff

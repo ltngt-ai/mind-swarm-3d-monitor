@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { ThoughtBubble } from './ThoughtBubble';
+import logger from './utils/logger';
 
 interface ThoughtHistoryEntry {
   thought: string;
@@ -496,17 +497,17 @@ export class AgentManager {
     const meshes = Array.from(this.agents.values()).map(a => a.mesh);
     const intersects = raycaster.intersectObjects(meshes, true);
     
-    console.log(`Raycasting: found ${intersects.length} intersections, checking ${meshes.length} agent meshes`);
+    logger.debug(`Raycasting: found ${intersects.length} intersections, checking ${meshes.length} agent meshes`);
     
     if (intersects.length > 0) {
       // Try to find the agent by checking the hit object and its parents
       const hitObject = intersects[0].object;
-      console.log('Hit object type:', hitObject.type, 'Name:', hitObject.name);
+      logger.debug('Hit object type:', hitObject.type, 'Name:', hitObject.name);
       
       for (const [_name, agent] of this.agents) {
         // Check if the hit object is the agent mesh itself
         if (agent.mesh === hitObject) {
-          console.log('Found agent by direct mesh match:', agent.name);
+          logger.debug('Found agent by direct mesh match:', agent.name);
           return agent;
         }
         
@@ -514,13 +515,13 @@ export class AgentManager {
         let parent = hitObject.parent;
         while (parent) {
           if (agent.mesh === parent) {
-            console.log('Found agent by parent match:', agent.name);
+            logger.debug('Found agent by parent match:', agent.name);
             return agent;
           }
           parent = parent.parent;
         }
       }
-      console.log('Hit object found but no agent matched');
+      logger.debug('Hit object found but no agent matched');
     }
     
     return null;
@@ -695,7 +696,7 @@ export class AgentManager {
     
     // Debug: Log when multiple agents are at same location
     if (agentCount > 1) {
-      console.log(`Multiple agents at ${location}:`, Array.from(agentsAtLocation));
+      logger.debug(`Multiple agents at ${location}:`, Array.from(agentsAtLocation));
     }
     
     // Find this agent's index in the set
@@ -719,7 +720,9 @@ export class AgentManager {
     
     // Debug orbit positions
     if (agentCount > 1) {
-      console.log(`Agent ${agentName} at index ${agentIndex}/${agentCount}, angle offset: ${angleOffset}, total angle: ${angle}`);
+      logger.debug(
+        `Agent ${agentName} at index ${agentIndex}/${agentCount}, angle offset: ${angleOffset}, total angle: ${angle}`
+      );
     }
     
     // Calculate position

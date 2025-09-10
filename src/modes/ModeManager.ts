@@ -1,5 +1,6 @@
 import { Mode, ModeContext } from './Mode';
 import { eventBus, Events } from '../utils/EventBus';
+import logger from '../utils/logger';
 
 export enum AppMode {
   AUTOMATIC = 'automatic',
@@ -21,23 +22,23 @@ export class ModeManager {
 
   registerMode(type: AppMode, mode: Mode): void {
     this.modes.set(type, mode);
-    console.log(`Registered mode: ${type}`);
+    logger.debug(`Registered mode: ${type}`);
   }
 
   async switchMode(type: AppMode): Promise<void> {
     if (this.transitioning) {
-      console.warn('Mode transition already in progress');
+      logger.warn('Mode transition already in progress');
       return;
     }
 
     if (this.currentModeType === type) {
-      console.log(`Already in ${type} mode`);
+      logger.debug(`Already in ${type} mode`);
       return;
     }
 
     const newMode = this.modes.get(type);
     if (!newMode) {
-      console.error(`Mode ${type} not registered`);
+      logger.error(`Mode ${type} not registered`);
       return;
     }
 
@@ -51,7 +52,7 @@ export class ModeManager {
 
     // Deactivate current mode
     if (this.currentMode) {
-      console.log(`Deactivating ${this.currentModeType} mode`);
+      logger.debug(`Deactivating ${this.currentModeType} mode`);
       await this.currentMode.deactivate();
     }
 
@@ -60,7 +61,7 @@ export class ModeManager {
     this.currentModeType = type;
     
     // Activate new mode
-    console.log(`Activating ${type} mode`);
+    logger.debug(`Activating ${type} mode`);
     await this.currentMode.activate();
     
     // Update UI to show current mode

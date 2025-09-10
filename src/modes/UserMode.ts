@@ -4,6 +4,7 @@ import { CameraMode } from '../camera/CameraController';
 // import { Mailbox } from '../Mailbox'; // Disabled - using CyberInfoWindow instead
 import { eventBus, Events } from '../utils/EventBus';
 import { config } from '../config';
+import logger from '../utils/logger';
 
 export class UserMode extends Mode {
   // private cameraController?: CameraController;
@@ -163,19 +164,19 @@ export class UserMode extends Mode {
     this.mouse.x = (mouseEvent.clientX / window.innerWidth) * 2 - 1;
     this.mouse.y = -(mouseEvent.clientY / window.innerHeight) * 2 + 1;
     
-    console.log('Mouse click at:', this.mouse.x, this.mouse.y);
+    logger.debug('Mouse click at:', this.mouse.x, this.mouse.y);
     
     // Raycast to find clicked cyber
     this.raycaster.setFromCamera(this.mouse, this.context.camera);
     
     const agent = this.context.agentManager.getAgentAtPosition(this.raycaster);
     if (agent) {
-      console.log('Selected cyber:', agent.name);
+      logger.debug('Selected cyber:', agent.name);
       this.selectCyber(agent.name);
       this.updateCyberInfo(); // Update info immediately
       return true;
     } else {
-      console.log('No cyber found at click position');
+      logger.debug('No cyber found at click position');
     }
     
     return false;
@@ -323,7 +324,7 @@ export class UserMode extends Mode {
         this.showNotification('Failed to send message', 'error');
       }
     } catch (error) {
-      console.error('Error sending message:', error);
+      logger.error('Error sending message:', error);
       this.showNotification('Failed to send message', 'error');
     }
   }

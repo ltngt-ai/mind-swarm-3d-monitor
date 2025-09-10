@@ -2,6 +2,7 @@ import { WebSocketClient } from '../WebSocketClient';
 import { AgentManager } from '../AgentManager';
 import { CameraController, CameraMode } from '../camera/CameraController';
 import { config } from '../config';
+import logger from '../utils/logger';
 
 export type InfoWindowVariant = 'automatic' | 'interactive';
 
@@ -580,7 +581,7 @@ export class CyberInfoWindow {
   private setupEventListeners() {
     // Listen for fast current cycle response
     this.wsClient.on('current_cycle', (data: any) => {
-      console.log('Received current_cycle (fast):', data);
+      logger.debug('Received current_cycle (fast):', data);
       if (data.cyber === this.selectedCyber && data.cycle_number) {
         this.currentCycle = data.cycle_number;
         this.selectedCycle = data.cycle_number;
@@ -601,11 +602,11 @@ export class CyberInfoWindow {
     
     // Listen for cycle data responses
     this.wsClient.on('cycle_data', (data: any) => {
-      console.log('Received cycle_data:', data);
+      logger.debug('Received cycle_data:', data);
       if (data.cyber === this.selectedCyber && data.cycle_number !== undefined) {
         // Check what stages are in the data
         const stages = data.data ? Object.keys(data.data) : [];
-        console.log(`Cycle ${data.cycle_number} has stages:`, stages);
+        logger.debug(`Cycle ${data.cycle_number} has stages:`, stages);
         
         // Check if cycle is complete by looking at metadata
         const metadata = data.data?.metadata;
@@ -620,18 +621,18 @@ export class CyberInfoWindow {
         // 1. Cycle is marked as complete in metadata, OR
         // 2. We have ALL 4 main stages (observation, decision, execution, reflection)
         if (data.data && (isComplete || hasAllMainStages)) {
-          console.log(`Caching cycle ${data.cycle_number} (complete: ${isComplete}, hasAll: ${hasAllMainStages})`);
+          logger.debug(`Caching cycle ${data.cycle_number} (complete: ${isComplete}, hasAll: ${hasAllMainStages})`);
           this.cycleData.set(data.cycle_number, data.data);
         } else {
-          console.warn(`Not caching incomplete cycle ${data.cycle_number}. Has: ${stages.join(', ')}, Complete: ${isComplete}`);
+          logger.warn(`Not caching incomplete cycle ${data.cycle_number}. Has: ${stages.join(', ')}, Complete: ${isComplete}`);
           // Don't cache incomplete data
           // If this is the current cycle and it's incomplete, schedule a retry
           if (data.cycle_number === this.selectedCycle) {
-            console.log(`Cycle ${data.cycle_number} is incomplete, will retry in 1s...`);
+            logger.debug(`Cycle ${data.cycle_number} is incomplete, will retry in 1s...`);
             setTimeout(() => {
               // Only retry if still on the same cycle
               if (this.selectedCycle === data.cycle_number) {
-                console.log(`Retrying cycle ${data.cycle_number}...`);
+                logger.debug(`Retrying cycle ${data.cycle_number}...`);
                 this.fetchCycleData(data.cycle_number, true);
               }
             }, 1000);
@@ -646,7 +647,7 @@ export class CyberInfoWindow {
     
     // Listen for cycles list response
     this.wsClient.on('cycles_list', (data: any) => {
-      console.log('Received cycles_list:', data);
+      logger.debug('Received cycles_list:', data);
       if (data.cyber === this.selectedCyber) {
         // If we have cycles data from index.json, use it
         if (data.cycles && data.cycles.length > 0) {
@@ -654,12 +655,12 @@ export class CyberInfoWindow {
             .map((c: any) => typeof c === 'number' ? c : c.cycle_number || 0)
             .filter((n: number) => n > 0);  // Skip cycle 0 as it's usually incomplete
           
-          console.log('Valid cycles found:', validCycles);
+          logger.debug('Valid cycles found:', validCycles);
           
           if (validCycles.length > 0) {
             this.currentCycle = Math.max(...validCycles);
             this.selectedCycle = this.currentCycle;
-            console.log(`Set currentCycle to ${this.currentCycle}, selectedCycle to ${this.selectedCycle}`);
+            logger.debug(`Set currentCycle to ${this.currentCycle}, selectedCycle to ${this.selectedCycle}`);
           }
         }
         // If no cycles from index.json, we'll rely on current_reflection to give us the current cycle
@@ -679,7 +680,7 @@ export class CyberInfoWindow {
     
     // Listen for current reflection response (contains cycle info)
     this.wsClient.on('current_reflection', (data: any) => {
-      console.log('Received current_reflection:', data);
+      logger.debug('Received current_reflection:', data);
       if (data.cyber === this.selectedCyber) {
         // Get the actual cycle number from the response
         const cycleNum = data.cycle_number;
@@ -690,18 +691,18 @@ export class CyberInfoWindow {
           // Always set selectedCycle on initial load (when it's 999)
           if (this.selectedCycle >= 999) {
             this.selectedCycle = cycleNum;
-            console.log(`Setting selectedCycle to ${this.selectedCycle} from current_reflection`);
+            logger.debug(`Setting selectedCycle to ${this.selectedCycle} from current_reflection`);
           } else if (this.selectedCycle <= 0) {
             // Also handle the case where it might be 0 or negative
             this.selectedCycle = cycleNum;
-            console.log(`Setting selectedCycle to ${this.selectedCycle} from current_reflection (was <= 0)`);
+            logger.debug(`Setting selectedCycle to ${this.selectedCycle} from current_reflection (was <= 0)`);
           }
           
           // Update the input field
           const cycleInput = this.container.querySelector('#cycle-number') as HTMLInputElement;
           if (cycleInput && this.selectedCycle > 0) {
             cycleInput.value = this.selectedCycle.toString();
-            console.log(`Updated cycle input to ${this.selectedCycle}`);
+            logger.debug(`Updated cycle input to ${this.selectedCycle}`);
           }
           
           this.updateCycleStatus();
@@ -727,10 +728,10 @@ export class CyberInfoWindow {
     
     // Listen for cycle started events
     this.wsClient.on('cycle_started', (message: any) => {
-      console.log('Received cycle_started event:', message);
+      logger.debug('Received cycle_started event:', message);
       const data = message.data || message;  // Handle both nested and flat structures
       if (data.cyber === this.selectedCyber) {
-        console.log(`Cycle started for ${data.cyber}: ${data.cycle_number}, Following: ${this.isFollowing}`);
+        logger.debug(`Cycle started for ${data.cyber}: ${data.cycle_number}, Following: ${this.isFollowing}`);
         this.currentCycle = data.cycle_number;
         this.updateCycleStatus();
         // In follow mode, do NOT switch to the new cycle immediately to avoid showing loading
@@ -740,14 +741,14 @@ export class CyberInfoWindow {
     
     // Listen for cycle completed events (more reliable than cycle_started)
     this.wsClient.on('cycle_completed', (message: any) => {
-      console.log('Received cycle_completed event:', message);
+      logger.debug('Received cycle_completed event:', message);
       const data = message.data || message;  // Handle both nested and flat structures
       if (data.cyber === this.selectedCyber) {
-        console.log(`Cycle completed for ${data.cyber}: ${data.cycle_number}, Following: ${this.isFollowing}`);
+        logger.debug(`Cycle completed for ${data.cyber}: ${data.cycle_number}, Following: ${this.isFollowing}`);
         this.currentCycle = data.cycle_number;
         this.updateCycleStatus();
         if (this.isFollowing) {
-          console.log(`Following mode active, showing completed cycle ${data.cycle_number}`);
+          logger.debug(`Following mode active, showing completed cycle ${data.cycle_number}`);
           this.selectedCycle = data.cycle_number;
           this.fetchCycleData(this.selectedCycle, true);  // Force refresh to get complete data
           
@@ -870,7 +871,7 @@ export class CyberInfoWindow {
     const contentEl = this.container.querySelector('#info-content') as HTMLElement;
     const cycleData = this.cycleData.get(this.selectedCycle);
     
-    console.log(`Displaying stage ${this.selectedStage} for cycle ${this.selectedCycle}`, cycleData);
+    logger.debug(`Displaying stage ${this.selectedStage} for cycle ${this.selectedCycle}`, cycleData);
     
     if (!cycleData) {
       // Do not replace content with a loading message; keep last shown content
@@ -1167,7 +1168,7 @@ export class CyberInfoWindow {
     
     // Don't fetch invalid cycle numbers
     if (cycleNumber <= 0 || cycleNumber >= 999) {
-      console.warn(`Skipping fetch for invalid cycle number: ${cycleNumber}`);
+      logger.warn(`Skipping fetch for invalid cycle number: ${cycleNumber}`);
       return;
     }
     
@@ -1181,11 +1182,11 @@ export class CyberInfoWindow {
       const isComplete = cachedData?.metadata?.status === 'completed';
       
       if (isComplete || hasAllMainStages) {
-        console.log(`Using cached data for cycle ${cycleNumber} (complete: ${isComplete}, stages: ${stages.join(', ')})`);
+        logger.debug(`Using cached data for cycle ${cycleNumber} (complete: ${isComplete}, stages: ${stages.join(', ')})`);
         this.displayStageData();
         return;
       } else {
-        console.log(`Cached data for cycle ${cycleNumber} is incomplete, re-fetching... Has: ${stages.join(', ')}`);
+        logger.debug(`Cached data for cycle ${cycleNumber} is incomplete, re-fetching... Has: ${stages.join(', ')}`);
         this.cycleData.delete(cycleNumber);  // Remove incomplete data
       }
     }
@@ -1197,7 +1198,7 @@ export class CyberInfoWindow {
       cycle_number: cycleNumber,
       request_id: `cycle_${cycleNumber}_${Date.now()}`
     };
-    console.log('Requesting cycle data:', request);
+    logger.debug('Requesting cycle data:', request);
     this.wsClient.send(request);
     
     // Avoid heavy-handed 'Loading...' messaging; keep subtle
@@ -1272,7 +1273,7 @@ export class CyberInfoWindow {
   
   private openMessageDialog() {
     // TODO: Implement message dialog
-    console.log('Opening message dialog for', this.selectedCyber);
+    logger.debug('Opening message dialog for', this.selectedCyber);
     this.updateStatus('Message dialog not yet implemented');
   }
 
@@ -1447,7 +1448,7 @@ export class CyberInfoWindow {
         played = false;
         await this.ttsAudio.play().then(() => { played = true; }).catch((e) => {
           this.updateStatus('Audio playback blocked');
-          console.warn('TTS blob play() failed', e);
+          logger.warn('TTS blob play() failed', e);
         });
         if (!played) {
           // Give up cleanly and try next queued item

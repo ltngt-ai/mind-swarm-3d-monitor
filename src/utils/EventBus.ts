@@ -93,4 +93,7 @@ export const Events = {
   STREAM_START: 'stream:start',
   STREAM_STOP: 'stream:stop',
   STREAM_CAMERA_CHANGE: 'stream:cameraChange',
+
+  // Logging
+  LOG_ENTRY: 'log:entry',
 } as const;

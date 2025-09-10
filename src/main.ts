@@ -26,6 +26,7 @@ import { eventBus, Events } from './utils/EventBus';
 
 // UI Components
 import { CyberInfoWindow, InfoWindowVariant } from './ui/CyberInfoWindow';
+import logger from './utils/logger';
 
 // Types
 import { 
@@ -176,7 +177,7 @@ wsClient.on('agent_state_changed', (data: AgentStateChangedEvent) => {
 wsClient.on('file_activity', (data: FileActivityEvent) => {
   // Pulse the directory tower when files are accessed
   if (data.path) {
-    console.log('File activity detected:', data.path);
+    logger.debug('File activity detected:', data.path);
     filesystemViz.pulseDirectory(data.path);
     
     // If activity level is provided, update it
@@ -194,12 +195,12 @@ wsClient.on('file_activity', (data: FileActivityEvent) => {
 
 // Biofeedback stats -> update agents and UI
 wsClient.on('biofeedback', (data: any) => {
-  console.log('Biofeedback event received:', JSON.stringify(data));
+  logger.debug('Biofeedback event received:', JSON.stringify(data));
   if (data && data.cyber) {
     // Ensure the agent exists even if we only receive biofeedback
     let agent = agentManager.getAgentData(data.cyber);
     if (!agent) {
-      console.log(`Biofeedback for unknown agent ${data.cyber} — creating.`);
+      logger.debug(`Biofeedback for unknown agent ${data.cyber} — creating.`);
       agentManager.addAgent(data.cyber, {
         type: 'general',
         state: 'unknown',
@@ -215,7 +216,7 @@ wsClient.on('biofeedback', (data: any) => {
       restlessness: data.restlessness,
       memory_pressure: data.memory_pressure
     };
-    console.log('Updating agent bio with:', bioData);
+    logger.debug('Updating agent bio with:', bioData);
     agentManager.updateAgentBiofeedback(data.cyber, bioData);
   }
 });
@@ -241,7 +242,7 @@ wsClient.on('biofeedback', (data: any) => {
 // Handle agent location changes
 wsClient.on('agent_location_changed', (data: any) => {
   if (data.name && data.new_location) {
-    console.log(`Agent ${data.name} moved to: ${data.new_location}`);
+    logger.debug(`Agent ${data.name} moved to: ${data.new_location}`);
     agentManager.updateAgentLocation(data.name, data.new_location);
     
     eventBus.emit(Events.CYBER_ACTIVITY, { 
@@ -259,7 +260,7 @@ wsClient.on('status_update', (data: any) => {
       let agent = agentManager.getAgentData(name);
       // Create agent if missing to handle servers that only send status_update
       if (!agent) {
-        console.log(`Status update for unknown agent ${name} — creating.`);
+        logger.debug(`Status update for unknown agent ${name} — creating.`);
         agentManager.addAgent(name, {
           type: cyberData.type || cyberData.cyber_type || 'general',
           state: (cyberData.state || 'unknown').toLowerCase(),
@@ -273,7 +274,7 @@ wsClient.on('status_update', (data: any) => {
 
       // Apply location/state updates
       if (cyberData.current_location && agent.currentLocation !== cyberData.current_location) {
-        console.log(`Agent ${name} location updated to: ${cyberData.current_location}`);
+        logger.debug(`Agent ${name} location updated to: ${cyberData.current_location}`);
         agentManager.updateAgentLocation(name, cyberData.current_location);
       }
 
@@ -296,7 +297,7 @@ wsClient.on('status_update', (data: any) => {
 // Handle cycle started events - fetch reflection for display
 wsClient.on('cycle_started', (data: any) => {
   if (data.cyber && data.cycle_number) {
-    console.log(`Cycle ${data.cycle_number} started for ${data.cyber}, fetching reflection...`);
+    logger.debug(`Cycle ${data.cycle_number} started for ${data.cyber}, fetching reflection...`);
     // Request the reflection from the previous cycle (cycle_number - 1)
     if (data.cycle_number > 1) {
       const requestId = `ref_${data.cyber}_${Date.now()}`;
@@ -326,11 +327,11 @@ wsClient.on('current_reflection', (data: any) => {
       }
     }
     
-    console.log(`Showing reflection for ${data.cyber}:`, reflectionText);
+    logger.debug(`Showing reflection for ${data.cyber}:`, reflectionText);
     agentManager.showThought(data.cyber, reflectionText);
   } else if (data.cyber) {
     // No reflection available yet
-    console.log(`No reflection available for ${data.cyber} yet`);
+    logger.debug(`No reflection available for ${data.cyber} yet`);
     agentManager.showThought(data.cyber, 'Awaiting first reflection...');
   }
 });
@@ -358,7 +359,7 @@ async function fetchStatusUpdate() {
           if (agent) {
             // Check for location changes
             if (cyberData.current_location && agent.currentLocation !== cyberData.current_location) {
-              console.log(`Agent ${name} location changed: ${agent.currentLocation} -> ${cyberData.current_location}`);
+              logger.debug(`Agent ${name} location changed: ${agent.currentLocation} -> ${cyberData.current_location}`);
               agentManager.updateAgentLocation(name, cyberData.current_location);
             }
             
@@ -378,20 +379,20 @@ async function fetchStatusUpdate() {
 
 // Fetch initial cyber status
 async function fetchInitialStatus() {
-  console.log(`Fetching initial status from ${config.apiUrl}...`);
+  logger.debug(`Fetching initial status from ${config.apiUrl}...`);
   try {
     const response = await fetch(`${config.apiUrl}/status`);
-    console.log('Status response:', response.status);
+    logger.debug('Status response:', response.status);
     
     if (response.ok) {
       const data: StatusResponse = await response.json();
-      console.log('Status data:', data);
+      logger.debug('Status data:', data);
       
       // Add all existing cybers
       if (data.Cybers) {
-        console.log('Found cybers:', Object.keys(data.Cybers));
+        logger.debug('Found cybers:', Object.keys(data.Cybers));
         Object.entries(data.Cybers).forEach(([name, cyberData]) => {
-          console.log(`Adding cyber ${name}:`, cyberData);
+          logger.debug(`Adding cyber ${name}:`, cyberData);
           agentManager.addAgent(name, {
             type: cyberData.type || 'general',
             state: cyberData.state?.toLowerCase() || 'unknown',
@@ -412,16 +413,16 @@ async function fetchInitialStatus() {
         });
         // Status updates handled by CyberInfoWindow now
       } else {
-        console.log('No cybers in status response');
+        logger.debug('No cybers in status response');
       }
     } else if (response.status === 503) {
-      console.log('Server initializing, will retry...');
+      logger.info('Server initializing, will retry...');
       setTimeout(fetchInitialStatus, 2000);
     } else {
-      console.error('Status response not OK:', response.status);
+      logger.error('Status response not OK:', response.status);
     }
   } catch (error) {
-    console.error('Failed to fetch initial status:', error);
+    logger.error('Failed to fetch initial status:', error);
   }
 }
 
@@ -484,13 +485,13 @@ function renderFrame() {
     let logged = false;
     let guard = 0;
     while (err !== gl.NO_ERROR && guard++ < 8) {
-      console.warn('WebGL error:', glErrorToString(gl, err));
+      logger.warn('WebGL error:', glErrorToString(gl, err));
       logged = true;
       err = gl.getError();
     }
     if (logged) {
       // Also log renderer stats to correlate
-      console.info('Renderer info:', renderer.info);
+      logger.info('Renderer info:', renderer.info);
     }
     lastGlErrorCheck = performance.now();
   }
@@ -506,7 +507,7 @@ function animate() {
   } catch (err) {
     // Keep rendering even if one frame throws; log once per second max
     if ((window as any).__lastAnimErrTime__ === undefined || Date.now() - (window as any).__lastAnimErrTime__ > 1000) {
-      console.error('Animation frame error:', err);
+      logger.error('Animation frame error:', err);
       (window as any).__lastAnimErrTime__ = Date.now();
     }
   }
@@ -593,7 +594,7 @@ setInterval(() => {
     } catch (err) {
       // Log sparingly
       if ((window as any).__lastAnimErrTime__ === undefined || Date.now() - (window as any).__lastAnimErrTime__ > 1000) {
-        console.error('Fallback frame error:', err);
+        logger.error('Fallback frame error:', err);
         (window as any).__lastAnimErrTime__ = Date.now();
       }
     }

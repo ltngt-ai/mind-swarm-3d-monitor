@@ -4,6 +4,7 @@ import { ModeContext } from './Mode';
 import { UserMode } from './UserMode';
 import { eventBus, Events } from '../utils/EventBus';
 import { config } from '../config';
+import logger from '../utils/logger';
 
 interface LogEntry {
   timestamp: Date;
@@ -100,6 +101,16 @@ export class DeveloperMode extends UserMode {
           this.logLevel = value as any;
           this.filterLogs();
         });
+
+      // Control global app logging level
+      const currentAppLevel = (logger.level && logger.level()) || 'info';
+      debugFolder
+        .add({ appLogLevel: currentAppLevel }, 'appLogLevel', ['error', 'warn', 'info', 'debug'])
+        .name('App Log Level')
+        .onChange((value: 'error' | 'warn' | 'info' | 'debug') => {
+          try { localStorage.setItem('LOG_LEVEL', value); } catch {}
+          logger.setLevel(value);
+        });
         
       debugFolder.add({ clearLogs: () => this.clearLogs() }, 'clearLogs')
         .name('Clear Logs');
@@ -136,6 +147,8 @@ export class DeveloperMode extends UserMode {
     // System events
     eventBus.on(Events.SYSTEM_ERROR, this.onSystemError.bind(this));
     eventBus.on(Events.SYSTEM_WARNING, this.onSystemWarning.bind(this));
+    // App logger events
+    eventBus.on(Events.LOG_ENTRY, this.onLogEntry.bind(this));
   }
 
   protected cleanupEventHandlers(): void {
@@ -264,6 +277,7 @@ export class DeveloperMode extends UserMode {
           color: #00ff00;
           padding: 2px 5px;
           font-size: 11px;
+          margin-right: 10px;
         ">
           <option value="all">All</option>
           <option value="debug">Debug</option>
@@ -271,6 +285,21 @@ export class DeveloperMode extends UserMode {
           <option value="warning">Warning</option>
           <option value="error">Error</option>
         </select>
+        <label style="margin-left:6px; color:#00ff00; font-size:11px;">App Log:
+          <select id="app-log-level" style="
+            background: rgba(0, 20, 0, 0.8);
+            border: 1px solid #00ff00;
+            color: #00ff00;
+            padding: 2px 5px;
+            font-size: 11px;
+            margin-left: 4px;
+          ">
+            <option value="error">error</option>
+            <option value="warn">warn</option>
+            <option value="info">info</option>
+            <option value="debug">debug</option>
+          </select>
+        </label>
       </div>
     `;
     
@@ -302,6 +331,19 @@ export class DeveloperMode extends UserMode {
       this.logLevel = (e.target as HTMLSelectElement).value as any;
       this.filterLogs();
     });
+
+    // Global app log level control
+    const appLevel = document.getElementById('app-log-level') as HTMLSelectElement;
+    if (appLevel) {
+      try {
+        appLevel.value = (logger.level && logger.level()) || 'info';
+      } catch {}
+      appLevel.addEventListener('change', (e) => {
+        const val = (e.target as HTMLSelectElement).value as 'error' | 'warn' | 'info' | 'debug';
+        try { localStorage.setItem('LOG_LEVEL', val); } catch {}
+        logger.setLevel(val);
+      });
+    }
   }
 
   private createMetricsPanel(): void {
@@ -440,11 +482,11 @@ export class DeveloperMode extends UserMode {
       };
       
       this.logWebSocket.onerror = (error) => {
-        console.error('Log WebSocket error:', error);
+        logger.error('Log WebSocket error:', error);
         this.addLog('error', 'LogStream', 'Failed to connect to log stream');
       };
     } catch (error) {
-      console.error('Failed to connect log stream:', error);
+      logger.error('Failed to connect log stream:', error);
     }
   }
 
