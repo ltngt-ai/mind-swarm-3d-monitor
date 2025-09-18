@@ -544,12 +544,13 @@ export class AutomaticMode extends Mode {
   private async connectTwitch(): Promise<void> {
     if (!this.twitchClient || !config.twitch?.channel) return;
     
-    logger.info('Connecting to Twitch channel:', config.twitch.channel);
-    await this.twitchClient.connect(config.twitch.channel);
-    
+    // Show overlay first so UI is ready for connection events
     if (this.twitchOverlay) {
       this.twitchOverlay.show();
     }
+    
+    logger.info('Connecting to Twitch channel:', config.twitch.channel);
+    await this.twitchClient.connect(config.twitch.channel);
     
     // Update stream overlay to show Twitch status
     if (this.streamOverlay) {

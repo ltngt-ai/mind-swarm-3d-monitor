@@ -145,15 +145,17 @@ export class TwitchClient extends EventEmitter {
   private scheduleReconnect(): void {
     if (this.reconnectTimeout) return;
     
+    logger.info('TwitchClient: Scheduling reconnect in 5 seconds...');
     this.reconnectTimeout = window.setTimeout(() => {
       this.reconnectTimeout = undefined;
+      logger.info('TwitchClient: Attempting to reconnect...');
       this.connect();
     }, 5000);
   }
   
   private startPollingMessages(): void {
     const poll = async () => {
-      if (!this.isConnected) return;
+      // Don't return early - we need to poll to detect reconnection
       
       try {
         // Use proxy path when on dev server to avoid CORS
@@ -186,10 +188,27 @@ export class TwitchClient extends EventEmitter {
           
           // Update connection status from backend
           if (data.connected !== undefined) {
+            const wasConnected = this.isConnected;
             this.isConnected = data.connected;
-            if (!data.connected && data.last_error) {
-              logger.warn('TwitchClient: Connection lost:', data.last_error);
+            
+            if (!data.connected && wasConnected) {
+              // Lost connection
+              logger.warn('TwitchClient: Connection lost:', data.last_error || 'Unknown reason');
               this.emit('disconnected');
+              // Schedule reconnection attempt
+              this.scheduleReconnect();
+            } else if (data.connected && !wasConnected) {
+              // Regained connection
+              logger.info('TwitchClient: Connection restored');
+              this.emit('connected', { 
+                channel: data.channel || this.config.channel,
+                mock: data.mock || false
+              });
+              // Clear any pending reconnect attempts
+              if (this.reconnectTimeout) {
+                clearTimeout(this.reconnectTimeout);
+                this.reconnectTimeout = undefined;
+              }
             }
           }
         }
@@ -197,9 +216,8 @@ export class TwitchClient extends EventEmitter {
         logger.error('TwitchClient: Failed to poll messages', error);
       }
       
-      if (this.isConnected) {
-        setTimeout(poll, 1000);
-      }
+      // Continue polling even if disconnected to detect reconnection
+      setTimeout(poll, 1000);
     };
     
     poll();

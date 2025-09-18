@@ -330,11 +330,13 @@ export class TwitchChatOverlay {
     if (this.statusBar) {
       const channelEl = this.statusBar.querySelector('.twitch-channel');
       if (channelEl) {
-        channelEl.textContent = data.channel || 'Connected';
+        const channelName = data.channel ? `#${data.channel}` : 'Connected';
+        channelEl.textContent = channelName;
+        channelEl.style.color = '#00ff88';  // Restore normal color after reconnection
       }
     }
     
-    this.addSystemMessage(`Connected to ${data.channel}`, 'success');
+    // Don't add a system message here - the backend already sends one
   }
   
   private onDisconnected(): void {
@@ -343,11 +345,15 @@ export class TwitchChatOverlay {
     if (this.statusBar) {
       const channelEl = this.statusBar.querySelector('.twitch-channel');
       if (channelEl) {
-        channelEl.textContent = 'Disconnected';
+        channelEl.textContent = 'Reconnecting...';
+        channelEl.style.color = '#ff6666';
       }
     }
     
-    this.addSystemMessage('Disconnected from Twitch', 'error');
+    // Only show disconnection message if it's a real disconnect, not during initial connection
+    if (this.messages.length > 0) {
+      this.addSystemMessage('Connection lost. Reconnecting...', 'error');
+    }
   }
   
   private onMessage(message: TwitchMessage): void {
