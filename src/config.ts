@@ -6,6 +6,13 @@ export interface Config {
   autoReconnect: boolean;
   reconnectInterval: number;
   ttsUrl?: string; // optional external TTS endpoint
+  twitch?: {
+    enabled: boolean;
+    channel?: string;
+    mockMode?: boolean;
+    commandPrefix?: string;
+    position?: 'top-right' | 'bottom-right' | 'top-left' | 'bottom-left';
+  };
 }
 
 // Get server configuration from environment or URL parameters
@@ -55,6 +62,13 @@ export function getConfig(): Config {
   const wsOverride = urlParams.get('ws');   // e.g. wss://server:443/path
   const basePath = urlParams.get('base') || ''; // prefix like /mind-swarm
   const ttsUrl = urlParams.get('tts') || urlParams.get('ttsUrl') || undefined; // external TTS endpoint
+  
+  // Twitch configuration from URL params
+  const twitchChannel = urlParams.get('twitch');
+  const twitchMode = urlParams.get('twitch_mode') === '1' || urlParams.get('twitchMode') === '1';
+  const twitchMockParam = urlParams.get('twitch_mock') || urlParams.get('twitchMock');
+  const twitchMock = twitchMockParam === null ? null : twitchMockParam === '1';
+  const twitchPosition = urlParams.get('twitch_pos') || urlParams.get('twitchPos');
 
   // Helper to normalize path joining
   const join = (a: string, b: string) => {
@@ -84,12 +98,21 @@ export function getConfig(): Config {
     }
   }
 
+  const twitchConfig = (twitchChannel || twitchMode) ? {
+    enabled: true,
+    channel: twitchChannel || undefined,
+    mockMode: twitchMock === null ? true : twitchMock, // Default to mock if not specified
+    commandPrefix: urlParams.get('twitch_prefix') || '!',
+    position: (twitchPosition as any) || 'top-right'
+  } : undefined;
+
   return {
     apiUrl,
     wsUrl,
     autoReconnect: true,
     reconnectInterval: 5000,
-    ttsUrl
+    ttsUrl,
+    twitch: twitchConfig
   };
 }
 

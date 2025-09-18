@@ -2,6 +2,10 @@ import * as THREE from 'three';
 import { Mode, ModeContext } from './Mode';
 import { CameraMode } from '../camera/CameraController';
 import { eventBus, Events } from '../utils/EventBus';
+import { TwitchClient, TwitchCommand } from '../twitch/TwitchClient';
+import { TwitchChatOverlay } from '../twitch/TwitchChatOverlay';
+import { config } from '../config';
+import logger from '../utils/logger';
 
 interface CameraShot {
   type: 'cyber-focus' | 'overview';
@@ -33,10 +37,16 @@ export class AutomaticMode extends Mode {
   // Activity feed removed
   // Safety: force a camera switch at this interval even if a long shot was queued
   private forceSwitchInterval: number = 90000; // 90 seconds hard cap
+  
+  // Twitch integration
+  private twitchClient?: TwitchClient;
+  private twitchOverlay?: TwitchChatOverlay;
+  private commandQueue: Array<{ command: TwitchCommand; timestamp: number }> = [];
 
   constructor(context: ModeContext) {
     super('Automatic', context);
     this.initializeCinematicPaths();
+    this.initializeTwitch();
   }
 
   protected setupUI(): void {
@@ -115,6 +125,11 @@ export class AutomaticMode extends Mode {
     if (this.streamOverlay) this.streamOverlay.style.display = 'block';
     // Activity feed hidden (feature disabled)
     
+    // Connect to Twitch if configured
+    if (config.twitch?.enabled) {
+      await this.connectTwitch();
+    }
+    
     this.showNotification('Automatic mode activated - Following cybers', 'info');
   }
 
@@ -131,6 +146,14 @@ export class AutomaticMode extends Mode {
       this.context.autoInfoWindow.hide();
       this.context.autoInfoWindow.setFollowButtonVisible(true);
       this.context.autoInfoWindow.setActionBarVisible(true);
+    }
+    
+    // Disconnect Twitch
+    if (this.twitchClient) {
+      this.twitchClient.disconnect();
+    }
+    if (this.twitchOverlay) {
+      this.twitchOverlay.hide();
     }
     
     // Clear shot queue
@@ -492,5 +515,260 @@ export class AutomaticMode extends Mode {
     if (names.length === 0) return null;
     this.roundRobinIndex = (this.roundRobinIndex + 1) % names.length;
     return names[this.roundRobinIndex];
+  }
+  
+  // Twitch integration methods
+  private initializeTwitch(): void {
+    if (!config.twitch?.enabled) return;
+    
+    this.twitchClient = new TwitchClient({
+      channel: config.twitch.channel,
+      mockMode: config.twitch.mockMode,
+      commandPrefix: config.twitch.commandPrefix,
+      apiUrl: config.apiUrl
+    });
+    
+    this.twitchOverlay = new TwitchChatOverlay(this.twitchClient, {
+      position: config.twitch.position,
+      maxMessages: 10,
+      fadeOutDelay: 30000,
+      showCommands: true,
+      compactMode: false
+    });
+    
+    // Setup Twitch event handlers
+    this.twitchClient.on('command', this.handleTwitchCommand.bind(this));
+    this.twitchClient.on('command_response', this.handleTwitchResponse.bind(this));
+  }
+  
+  private async connectTwitch(): Promise<void> {
+    if (!this.twitchClient || !config.twitch?.channel) return;
+    
+    logger.info('Connecting to Twitch channel:', config.twitch.channel);
+    await this.twitchClient.connect(config.twitch.channel);
+    
+    if (this.twitchOverlay) {
+      this.twitchOverlay.show();
+    }
+    
+    // Update stream overlay to show Twitch status
+    if (this.streamOverlay) {
+      const twitchStatus = document.createElement('div');
+      twitchStatus.id = 'twitch-status';
+      twitchStatus.style.cssText = `
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(0, 255, 255, 0.3);
+        color: #9146ff;
+        font-size: 14px;
+      `;
+      twitchStatus.innerHTML = `
+        <span style="display: inline-block; animation: pulse 2s infinite;">📺</span>
+        Twitch: ${config.twitch.channel}
+      `;
+      this.streamOverlay.appendChild(twitchStatus);
+    }
+  }
+  
+  private handleTwitchCommand(command: TwitchCommand): void {
+    logger.info('Twitch command received:', command.command, command.args);
+    
+    // Add to command queue
+    this.commandQueue.push({
+      command,
+      timestamp: Date.now()
+    });
+    
+    // Process command based on type
+    switch (command.command) {
+      case 'focus':
+      case 'follow':
+        this.handleFocusCommand(command);
+        break;
+        
+      case 'ask':
+        this.handleAskCommand(command);
+        break;
+        
+      case 'status':
+        this.handleStatusCommand(command);
+        break;
+        
+      case 'task':
+        this.handleTaskCommand(command);
+        break;
+        
+      case 'overview':
+        this.queueShot({ type: 'overview', duration: 15000 });
+        this.switchShot();
+        break;
+        
+      case 'help':
+        this.sendTwitchHelp();
+        break;
+        
+      default:
+        logger.warn('Unknown Twitch command:', command.command);
+    }
+  }
+  
+  private handleFocusCommand(command: TwitchCommand): void {
+    const agentName = command.args[0];
+    if (!agentName) return;
+    
+    // Find matching agent (case insensitive)
+    const names = this.context.agentManager.getAgentNames();
+    const match = names.find(name => name.toLowerCase() === agentName.toLowerCase());
+    
+    if (match) {
+      // Queue immediate focus on the requested cyber
+      this.queueShot({ 
+        type: 'cyber-focus', 
+        duration: 30000, // 30 second focus for viewer requests
+        target: match 
+      });
+      this.switchShot();
+      
+      // Send confirmation
+      this.twitchClient?.sendResponse('System', `Focusing camera on ${match}`);
+    } else {
+      this.twitchClient?.sendResponse('System', `Agent "${agentName}" not found`);
+    }
+  }
+  
+  private async handleAskCommand(command: TwitchCommand): Promise<void> {
+    const agentName = command.args[0];
+    const question = command.args.slice(1).join(' ');
+    
+    if (!agentName || !question) {
+      this.twitchClient?.sendResponse('System', 'Usage: !ask [agent] [question]');
+      return;
+    }
+    
+    // Find matching agent
+    const names = this.context.agentManager.getAgentNames();
+    const match = names.find(name => name.toLowerCase() === agentName.toLowerCase());
+    
+    if (!match) {
+      this.twitchClient?.sendResponse('System', `Agent "${agentName}" not found`);
+      return;
+    }
+    
+    // Focus on the agent being asked
+    this.queueShot({ 
+      type: 'cyber-focus', 
+      duration: 20000,
+      target: match 
+    });
+    this.switchShot();
+    
+    // In mock mode, generate a response
+    if (config.twitch?.mockMode) {
+      setTimeout(() => {
+        const mockResponses = [
+          'Processing your request...',
+          'Analyzing the data streams...',
+          'Interesting question, let me think...',
+          'Scanning the network for answers...',
+          'Consulting with other agents...'
+        ];
+        const response = mockResponses[Math.floor(Math.random() * mockResponses.length)];
+        
+        // Show thought bubble on agent
+        this.context.agentManager.showThought(match, `@${command.message.displayName}: ${question}`);
+        
+        // Send response to Twitch
+        this.twitchClient?.sendResponse(match, response);
+      }, 2000);
+    } else {
+      // Send to backend
+      try {
+        const response = await fetch(`${config.apiUrl}/api/twitch/ask`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agent: match,
+            question: question,
+            user: command.message.displayName
+          })
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          this.twitchClient?.sendResponse(match, data.response);
+        }
+      } catch (error) {
+        logger.error('Failed to process ask command:', error);
+      }
+    }
+  }
+  
+  private handleStatusCommand(_command: TwitchCommand): void {
+    const agentCount = this.context.agentManager.getAgentCount();
+    const activeAgents = this.context.agentManager.getAgentNames().slice(0, 5).join(', ');
+    const status = `${agentCount} agents active | Currently showing: ${activeAgents}`;
+    
+    this.twitchClient?.sendResponse('System', status);
+  }
+  
+  private async handleTaskCommand(command: TwitchCommand): Promise<void> {
+    const taskDescription = command.args.join(' ');
+    
+    if (!taskDescription) {
+      this.twitchClient?.sendResponse('System', 'Usage: !task [description]');
+      return;
+    }
+    
+    // Only allow mods/VIPs to create tasks
+    if (!command.message.isMod && !command.message.isVip) {
+      this.twitchClient?.sendResponse('System', 'Only moderators can create tasks');
+      return;
+    }
+    
+    if (config.twitch?.mockMode) {
+      this.twitchClient?.sendResponse('System', `Task queued: "${taskDescription}"`);
+    } else {
+      try {
+        const response = await fetch(`${config.apiUrl}/api/twitch/task`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            description: taskDescription,
+            user: command.message.displayName
+          })
+        });
+        
+        if (response.ok) {
+          this.twitchClient?.sendResponse('System', 'Task created successfully');
+        }
+      } catch (error) {
+        logger.error('Failed to create task:', error);
+      }
+    }
+  }
+  
+  private handleTwitchResponse(data: any): void {
+    const { command, response, success } = data;
+    
+    if (success && response) {
+      // Visual feedback for successful commands
+      if (command.command === 'focus' && this.currentShot?.target) {
+        this.showNotification(`Camera focusing on ${this.currentShot.target}`, 'info');
+      }
+    }
+  }
+  
+  private sendTwitchHelp(): void {
+    const helpMessage = [
+      'Available commands:',
+      '!ask [agent] [question] - Ask an agent a question',
+      '!focus [agent] - Focus camera on an agent',
+      '!status - Show system status',
+      '!overview - Switch to overview camera',
+      '!task [description] - Create a new task (mods only)',
+      '!help - Show this help message'
+    ].join(' | ');
+    
+    this.twitchClient?.sendResponse('System', helpMessage);
   }
 }
